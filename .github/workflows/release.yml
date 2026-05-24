@@ -25,7 +25,9 @@ jobs:
           - platform: 'macos-14'
             args: '--target aarch64-apple-darwin'
             rust-target: 'aarch64-apple-darwin'
-          - platform: 'macos-13'
+          # macOS-13 GitHub-hosted runners are scarce/deprecated; macos-14 ARM
+          # cross-compiles x86_64-apple-darwin cleanly via the Rust target.
+          - platform: 'macos-14'
             args: '--target x86_64-apple-darwin'
             rust-target: 'x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
