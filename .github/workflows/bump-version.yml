@@ -23,7 +23,7 @@ jobs:
       # from default-token pushes, so a tag pushed via GITHUB_TOKEN would NOT fire
       # release.yml's `on: push.tags` trigger. The PAT identity bypasses this.
       # See docs/PUBLISHING.md for setup.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.CLAWDUI_TOKEN }}
