@@ -52,7 +52,7 @@
         "https://github.com/SLR-Software-Solutions-Inc/ClawdUI/releases/latest/download/latest.json"
       ],
       "dialog": true,
-      "pubkey": "PLACEHOLDER_REPLACE_WITH_TAURI_PUBLIC_KEY"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcyNTBCMjMyMERGQTk5NzkKUldSNW1mb05NckpRY3NKVDJyak91VktJcWl3bFFZdDllSWNvOXBwTHpBb3RmYjJXY1Q4d1JxRkEK"
     }
   }
 }
