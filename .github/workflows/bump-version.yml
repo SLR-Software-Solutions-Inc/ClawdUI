@@ -18,10 +18,15 @@ jobs:
     permissions:
       contents: write
     steps:
+      # NOTE: Uses RELEASE_PAT (a PAT with `contents:write` + `workflows` scopes)
+      # instead of GITHUB_TOKEN. GitHub anti-recursion suppresses workflow triggers
+      # from default-token pushes, so a tag pushed via GITHUB_TOKEN would NOT fire
+      # release.yml's `on: push.tags` trigger. The PAT identity bypasses this.
+      # See docs/PUBLISHING.md for setup.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_PAT }}
 
       - uses: actions/setup-node@v4
         with:

@@ -9,6 +9,13 @@ All signing material is read from GitHub Actions secrets. Set them with the
 `gh` CLI (run from the repo root):
 
 ```bash
+# RELEASE_PAT — required so bump-version.yml's tag push triggers release.yml.
+# GitHub's anti-recursion policy suppresses workflow events from pushes made with
+# the default GITHUB_TOKEN, so we push the version tag with a PAT instead.
+# Create at: https://github.com/settings/personal-access-tokens/new
+# Scopes: contents (write), workflows (write). Save the token, then:
+gh secret set RELEASE_PAT
+
 # Apple signing (macOS notarized .dmg)
 base64 -i developer_id.p12 | gh secret set APPLE_CERTIFICATE
 gh secret set APPLE_CERTIFICATE_PASSWORD
@@ -69,7 +76,7 @@ From the Actions tab, run "Bump Version" and pick `patch`, `minor`, or
 3. Updates `package.json`, `src-tauri/Cargo.toml`,
    `src-tauri/tauri.conf.json`, and `VERSION`.
 4. Commits with `chore(version): bump to vX.Y.Z`.
-5. Tags `vX.Y.Z` and pushes — which triggers `release.yml`.
+5. Tags `vX.Y.Z` and pushes (using `RELEASE_PAT`) — which triggers `release.yml`.
 
 ## Verifying signed builds
 
@@ -92,4 +99,4 @@ The release matrix builds:
 | macOS arm64  | `macos-14`      | `.dmg`, `.app`   |
 | macOS x86_64 | `macos-13`      | `.dmg`, `.app`   |
 | Windows x64  | `windows-latest`| `.msi`, `.exe`   |
-| Linux x64    | `ubuntu-latest` | `.deb`, AppImage |
+| Linux x64    | `ubuntu-22.04`  | `.deb`, AppImage |
