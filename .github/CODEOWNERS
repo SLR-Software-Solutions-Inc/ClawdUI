@@ -1,0 +1,8 @@
+# GitHub CODEOWNERS — defines default reviewers for pull requests.
+# Docs: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Format: <pattern> <@owner1> <@owner2> ...
+# Last matching pattern wins.
+
+# Default — all files require approval from a maintainer.
+* @mr-narender
