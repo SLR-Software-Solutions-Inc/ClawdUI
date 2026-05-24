@@ -1,0 +1,147 @@
+/*
+  ClawdUI theme tokens.
+  Each [data-theme="…"] block overrides the variables defined in app.css.
+  Variables not overridden here inherit the :root defaults (Console aesthetic).
+*/
+
+/* ---------- Console (default — already in :root, kept here as canonical alias) ---------- */
+:root[data-theme="console"] {
+  --bg: oklch(0.10 0.005 75);
+  --surface: oklch(0.13 0.005 75);
+  --elevated: oklch(0.16 0.008 75);
+  --overlay: oklch(0.16 0.008 75 / 0.65);
+  --border: oklch(0.20 0.006 75);
+  --border-hi: oklch(0.30 0.010 75);
+  --line: oklch(0.18 0.006 75);
+  --fg: oklch(0.95 0.01 75);
+  --fg-2: oklch(0.70 0.02 75);
+  --fg-3: oklch(0.50 0.02 75);
+  --fg-4: oklch(0.36 0.02 75);
+  --accent: oklch(0.85 0.18 75);
+  --accent-soft: oklch(0.85 0.18 75 / 0.14);
+  --accent-line: oklch(0.85 0.18 75 / 0.55);
+  --success: oklch(0.78 0.16 155);
+  --warning: oklch(0.80 0.17 50);
+  --danger: oklch(0.65 0.22 25);
+}
+
+/*
+  ---------- Catppuccin Mocha ----------
+  Reference: https://github.com/catppuccin/catppuccin/blob/main/docs/style-guide.md
+*/
+:root[data-theme="catppuccin-mocha"] {
+  --bg: #1e1e2e;        /* base */
+  --surface: #181825;   /* mantle */
+  --elevated: #313244;  /* surface0 */
+  --overlay: rgba(24, 24, 37, 0.65);
+  --border: #313244;    /* surface0 */
+  --border-hi: #45475a; /* surface1 */
+  --line: #313244;
+  --fg: #cdd6f4;        /* text */
+  --fg-2: #bac2de;      /* subtext1 */
+  --fg-3: #a6adc8;      /* subtext0 */
+  --fg-4: #6c7086;      /* overlay0 */
+  --accent: #cba6f7;    /* mauve */
+  --accent-soft: rgba(203, 166, 247, 0.16);
+  --accent-line: rgba(203, 166, 247, 0.55);
+  --success: #a6e3a1;   /* green */
+  --warning: #f9e2af;   /* yellow */
+  --danger: #f38ba8;    /* red */
+}
+
+/* ---------- Catppuccin Macchiato ---------- */
+:root[data-theme="catppuccin-macchiato"] {
+  --bg: #24273a;
+  --surface: #1e2030;
+  --elevated: #363a4f;
+  --overlay: rgba(30, 32, 48, 0.65);
+  --border: #363a4f;
+  --border-hi: #494d64;
+  --line: #363a4f;
+  --fg: #cad3f5;
+  --fg-2: #b8c0e0;
+  --fg-3: #a5adcb;
+  --fg-4: #6e738d;
+  --accent: #c6a0f6;
+  --accent-soft: rgba(198, 160, 246, 0.16);
+  --accent-line: rgba(198, 160, 246, 0.55);
+  --success: #a6da95;
+  --warning: #eed49f;
+  --danger: #ed8796;
+}
+
+/* ---------- Catppuccin Frappé ---------- */
+:root[data-theme="catppuccin-frappe"] {
+  --bg: #303446;
+  --surface: #292c3c;
+  --elevated: #414559;
+  --overlay: rgba(41, 44, 60, 0.65);
+  --border: #414559;
+  --border-hi: #51576d;
+  --line: #414559;
+  --fg: #c6d0f5;
+  --fg-2: #b5bfe2;
+  --fg-3: #a5adce;
+  --fg-4: #737994;
+  --accent: #ca9ee6;
+  --accent-soft: rgba(202, 158, 230, 0.16);
+  --accent-line: rgba(202, 158, 230, 0.55);
+  --success: #a6d189;
+  --warning: #e5c890;
+  --danger: #e78284;
+}
+
+/* ---------- Catppuccin Latte (light) ---------- */
+:root[data-theme="catppuccin-latte"] {
+  --bg: #eff1f5;
+  --surface: #e6e9ef;
+  --elevated: #dce0e8;
+  --overlay: rgba(220, 224, 232, 0.7);
+  --border: #ccd0da;
+  --border-hi: #bcc0cc;
+  --line: #ccd0da;
+  --fg: #4c4f69;
+  --fg-2: #5c5f77;
+  --fg-3: #6c6f85;
+  --fg-4: #8c8fa1;
+  --accent: #8839ef;
+  --accent-soft: rgba(136, 57, 239, 0.12);
+  --accent-line: rgba(136, 57, 239, 0.55);
+  --success: #40a02b;
+  --warning: #df8e1d;
+  --danger: #d20f39;
+  --shadow-sm: 0 1px 2px rgba(76, 79, 105, 0.08);
+  --shadow-md: 0 8px 24px rgba(76, 79, 105, 0.12);
+  --shadow-lg: 0 24px 64px rgba(76, 79, 105, 0.18);
+}
+
+/*
+  ---------- Nord ----------
+  Reference: https://www.nordtheme.com
+*/
+:root[data-theme="nord"] {
+  --bg: #2e3440;        /* polar night nord0 */
+  --surface: #3b4252;   /* nord1 */
+  --elevated: #434c5e;  /* nord2 */
+  --overlay: rgba(46, 52, 64, 0.65);
+  --border: #434c5e;
+  --border-hi: #4c566a;
+  --line: #3b4252;
+  --fg: #eceff4;        /* snow storm nord6 */
+  --fg-2: #e5e9f0;      /* nord5 */
+  --fg-3: #d8dee9;      /* nord4 */
+  --fg-4: #6c7785;
+  --accent: #88c0d0;    /* frost nord8 */
+  --accent-soft: rgba(136, 192, 208, 0.18);
+  --accent-line: rgba(136, 192, 208, 0.55);
+  --success: #a3be8c;   /* aurora nord14 */
+  --warning: #ebcb8b;   /* nord13 */
+  --danger: #bf616a;    /* nord11 */
+}
+
+/* light theme small adjustments */
+:root[data-theme="catppuccin-latte"] .atmosphere::before {
+  background-image:
+    linear-gradient(to right, rgba(76, 79, 105, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(76, 79, 105, 0.06) 1px, transparent 1px);
+}

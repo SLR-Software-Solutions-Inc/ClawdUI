@@ -1,0 +1,12 @@
+ClawdUI
+Copyright 2026 SLR Software Solutions Inc.
+
+This product is an unofficial native GUI for Anthropic's Claude Code CLI.
+It is NOT affiliated with, endorsed by, or sponsored by Anthropic PBC.
+"Claude" is a trademark of Anthropic PBC, used solely to reference the
+underlying CLI that ClawdUI wraps.
+
+This software is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, express
+or implied. See LICENSE for full terms. Users are solely responsible for
+their use of this software and for compliance with Anthropic's terms of
+service when using the Claude API/CLI through this interface.

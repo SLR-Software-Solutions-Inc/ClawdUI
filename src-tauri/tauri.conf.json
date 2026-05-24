@@ -1,0 +1,58 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "ClawdUI",
+  "version": "1.0.0",
+  "identifier": "ca.slrsoft.clawdui",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "ClawdUI",
+        "width": 1500,
+        "height": 1024,
+        "minWidth": 1500,
+        "minHeight": 1024,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": {
+      "../sidecar/dist": "sidecar/dist"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.developer-id.plist"
+    },
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/SLR-Software-Solutions-Inc/ClawdUI/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "pubkey": "PLACEHOLDER_REPLACE_WITH_TAURI_PUBLIC_KEY"
+    }
+  }
+}

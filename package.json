@@ -1,0 +1,70 @@
+{
+  "name": "clawdui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "author": "SLR Software Solutions Inc",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/SLR-Software-Solutions-Inc/ClawdUI",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SLR-Software-Solutions-Inc/ClawdUI.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SLR-Software-Solutions-Inc/ClawdUI/issues"
+  },
+  "bin": {
+    "clawdui": "./scripts/cli-wrapper.sh"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "sidecar:install": "cd sidecar && npm install",
+    "sidecar:build": "cd sidecar && npm run build",
+    "tauri": "tauri",
+    "tauri:dev": "npm run sidecar:build && tauri dev",
+    "tauri:build": "npm run sidecar:build && tauri build",
+    "dev:install": "bash scripts/dev-install.sh"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/cli": "^2.11.1",
+    "@tsconfig/svelte": "^5.0.8",
+    "@types/node": "^24.12.2",
+    "@types/qrcode": "^1.5.6",
+    "svelte": "^5.55.4",
+    "svelte-check": "^4.4.6",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.10"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-html": "^6.4.11",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/lang-rust": "^6.0.2",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/theme-one-dark": "^6.1.3",
+    "@codemirror/view": "^6.42.1",
+    "@fontsource-variable/bricolage-grotesque": "^5.2.10",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@sentry/browser": "^10.53.1",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-fs": "^2.5.1",
+    "@tauri-apps/plugin-updater": "^2",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "codemirror": "^6.0.2",
+    "highlight.js": "^11.11.1",
+    "qrcode": "^1.5.4"
+  }
+}

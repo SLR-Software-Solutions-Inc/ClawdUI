@@ -1,0 +1,53 @@
+# Node
+node_modules/
+dist/
+.vite/
+*.log
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/
+
+# Sidecar build artifacts
+sidecar/dist/
+sidecar/node_modules/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Worktrunk
+worktrees/
+
+# Fastlane local material — NEVER commit
+fastlane/apple_api_key.json
+fastlane/.env
+fastlane/README.local.md
+fastlane/report.xml
+fastlane/test_output/
+fastlane/screenshots/
+fastlane/metadata/
+
+# Ruby bundler — local install path for fastlane gems
+.bundle/
+vendor/
+
+# Apple signing artifacts — must come from <your-local-secrets-dir> or match repo only
+*.p12
+*.mobileprovision
+*.cer
+AuthKey_*.p8
+*.provisionprofile

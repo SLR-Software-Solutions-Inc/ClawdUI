@@ -1,0 +1,18 @@
+# Matchfile — credentials and storage URL come from env (<your-env-file>).
+# Match storage = encrypted git repo configured at MATCH_GIT_URL.
+
+storage_mode      "git"
+git_url           ENV["MATCH_GIT_URL"]
+git_branch        ENV["MATCH_GIT_BRANCH"] || "master"
+
+type              "appstore"      # default; lanes override per-call
+app_identifier    ["ca.slrsoft.clawdui"]
+team_id           ENV["TEAM_ID"]
+platform          "macos"
+
+# certs are read-only on day-to-day developer machines
+readonly          true
+
+# Use ASC API key auth (no 2FA prompts).
+# Path is relative to the project root (fastlane CWD), not this Matchfile.
+api_key_path      ENV["MATCH_API_KEY_PATH"] || "fastlane/apple_api_key.json"

@@ -1,0 +1,39 @@
+{
+  "name": "clawdui-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "author": "SLR Software Solutions Inc",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/SLR-Software-Solutions-Inc/ClawdUI",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SLR-Software-Solutions-Inc/ClawdUI.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SLR-Software-Solutions-Inc/ClawdUI/issues"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "build:tsc": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@sentry/node": "^10.53.1",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.27.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  },
+  "overrides": {
+    "@anthropic-ai/sdk": "^0.95.0"
+  }
+}

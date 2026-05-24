@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      macOS TCC usage descriptions. Without these, opening a folder picker
+      (NSOpenPanel via tauri-plugin-dialog) or otherwise enumerating mount
+      points triggers a generic "would like to access files on a removable
+      volume" dialog with no rationale. Provide a short explanation so the
+      single prompt — if it ever fires — is intelligible to the user.
+
+      ClawdUI is hardened-runtime but NOT sandboxed (see
+      entitlements.developer-id.plist), so the
+      com.apple.security.files.removable.read-write entitlement does not
+      apply. The Info.plist usage description is the only knob available.
+    -->
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>ClawdUI only reads workspace folders you explicitly select. Access to a removable volume is required only if your workspace lives on an external drive.</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>ClawdUI only reads workspace folders you explicitly select. Access to a network volume is required only if your workspace lives on a network share.</string>
+</dict>
+</plist>

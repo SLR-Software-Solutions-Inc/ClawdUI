@@ -1,0 +1,11 @@
+# Appfile — values are pulled from `<your-env-file>`.
+# Do not hard-code Apple ID, team id, or any signing material here.
+
+apple_id ENV["APPLE_ID"]
+team_id  ENV["TEAM_ID"]
+
+app_identifier "ca.slrsoft.clawdui"
+
+for_platform :mac do
+  app_identifier "ca.slrsoft.clawdui"
+end

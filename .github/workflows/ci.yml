@@ -1,0 +1,20 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: cd sidecar && npm ci && npm run build
+      - run: npm run check
+      - run: npm run build
+      - run: cd src-tauri && cargo check
