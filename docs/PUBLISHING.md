@@ -16,14 +16,18 @@ All signing material is read from GitHub Actions secrets. Set them with the
 # Scopes: contents (write), workflows (write). Save the token, then:
 gh secret set CLAWDUI_TOKEN
 
-# Apple signing (macOS notarized .dmg)
+# Apple signing (macOS notarized .dmg) — Developer ID Application cert
 base64 -i developer_id.p12 | gh secret set APPLE_CERTIFICATE
-gh secret set APPLE_CERTIFICATE_PASSWORD
-gh secret set APPLE_SIGNING_IDENTITY   # "Developer ID Application: <name> (<TEAMID>)"
-gh secret set APPLE_ID                 # Apple ID email
-gh secret set APPLE_PASSWORD           # app-specific password from appleid.apple.com
-gh secret set APPLE_TEAM_ID            # Replace XXXXXXXXXX with your Apple Developer Team ID
-                                       # XXXXXXXXXX
+gh secret set APPLE_CERTIFICATE_PASSWORD          # password used when exporting the .p12
+gh secret set APPLE_SIGNING_IDENTITY              # "Developer ID Application: <name> (<TEAMID>)"
+gh secret set APPLE_TEAM_ID                       # XXXXXXXXXX — your Apple Developer Team ID
+
+# Notarization — App Store Connect API key (preferred over app-specific password)
+# Create at https://appstoreconnect.apple.com/access/users → Integrations → App Store Connect API → Keys
+# Download AuthKey_<KEY_ID>.p8 — save it locally, you can only download it once
+gh secret set APPLE_API_KEY_ID                    # 10-char key ID, e.g. ABC1234XYZ
+gh secret set APPLE_API_ISSUER                    # UUID, e.g. 1a234567-89bc-def0-1234-567890abcdef
+base64 -i AuthKey_<KEY_ID>.p8 | gh secret set APPLE_API_KEY
 
 # Tauri updater signing (for the built-in updater plugin)
 gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/clawdui.key
