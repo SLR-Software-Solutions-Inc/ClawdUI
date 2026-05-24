@@ -24,7 +24,7 @@ log = "0.4"
 tauri = { version = "2", features = [] }
 tauri-plugin-log = "2"
 parking_lot = "0.12"
-portable-pty = "0.8"
+portable-pty = "0.9"
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
