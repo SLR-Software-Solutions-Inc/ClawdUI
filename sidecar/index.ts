@@ -2823,6 +2823,25 @@ function getMain(): Session | null {
   return sessions.get("master") ?? null;
 }
 
+/**
+ * Serializes start_session bodies so a racing second start_session can't
+ * collide with a still-alive previous master's SDK Native CLI child. Each
+ * start_session chains onto this promise; failures are swallowed so one
+ * bad request never wedges the queue.
+ */
+let sessionMutex: Promise<void> = Promise.resolve();
+
+/**
+ * Wait for a Session's consume() loop to finish (alive=false) after end()
+ * has closed its queue. Bounded so a hung SDK never wedges the mutex.
+ */
+async function waitForSessionEnded(s: Session, timeoutMs = 5000): Promise<void> {
+  const start = Date.now();
+  while (s.alive && Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
 /** Backward-compat shim: most existing handlers operate on the active main
  * session. Children are addressed explicitly via session_id where needed. */
 function getActive(): Session | null {
@@ -3551,17 +3570,23 @@ async function handle(req: InboundMessage): Promise<void> {
       return;
 
     case "start_session": {
-      // Serialize against a still-active master. Front-end already calls
-      // end_session + waits for `session_ended` before re-issuing start, but
-      // races (event drop, double-click, HMR reload) can leave master alive.
-      // Tear it down synchronously instead of bouncing with an error — the
-      // caller has no way to recover from "session already active" mid-flow.
-      const existing = getMain();
-      if (existing) {
-        for (const [, sess] of sessions) sess.end();
-        sessions.clear();
-        emit({ id: req.id, type: "session_ended", session_id: "master" });
-      }
+      // Serialize start_session bodies via a process-wide mutex so a racing
+      // second start_session can't run while a previous master is still
+      // tearing down. Front-end already calls end_session + waits for
+      // `session_ended` before re-issuing start, but races (event drop,
+      // double-click, HMR reload) can leave master alive. Tear it down,
+      // AWAIT consume() exit, then proceed — never emit the synthetic
+      // session_ended on `req.id`: the front-end correlates responses by
+      // id and would see session_ended for its start_session call and
+      // never wait for session_started, causing the sidecar to appear
+      // hung.
+      sessionMutex = sessionMutex.then(async () => {
+        const existing = getMain();
+        if (existing) {
+          for (const [, sess] of sessions) sess.end();
+          sessions.clear();
+          await waitForSessionEnded(existing);
+        }
       // When the sidecar is bundled (esbuild produces a single dist/index.js),
       // @anthropic-ai/claude-agent-sdk loses its dynamic require resolution
       // for the platform-specific Native CLI binary it ships under
@@ -3749,6 +3774,25 @@ async function handle(req: InboundMessage): Promise<void> {
       const s = new Session(req.id, opts, "master", null);
       sessions.set("master", s);
       emit({ id: req.id, type: "session_started", session_id: "master" });
+      }).catch((e) => {
+        // Surface mutex-body failures as an error response — never let the
+        // mutex stay rejected, or every subsequent start_session would
+        // short-circuit. We swallow on the chain root via .then(undefined,...)
+        // below by re-resetting after .catch resolves.
+        emit({
+          id: req.id,
+          type: "error",
+          error: `start_session failed: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      });
+      // Defensive: ensure the mutex never stays rejected. A rejected
+      // sessionMutex would propagate forward and silently break every
+      // subsequent start_session.
+      sessionMutex = sessionMutex.then(
+        () => undefined,
+        () => undefined,
+      );
+      await sessionMutex;
       return;
     }
 
