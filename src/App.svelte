@@ -2091,7 +2091,7 @@
             on:session-action={(e) => {
               const action = e.detail.kind;
               showToast(
-                `${action === "resume" ? "Resuming" : "Forking"} ${e.detail.id.slice(0, 8)}… restarting`,
+                `${action === "resume" ? "Resuming session" : "Forking session"} ${e.detail.id.slice(0, 8)}…`,
               );
               void newSession();
             }}
