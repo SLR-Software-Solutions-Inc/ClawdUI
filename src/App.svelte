@@ -236,7 +236,22 @@
   let resumeBackfillRemaining = 0;
   let resumeBackfillTotal = 0;
   const RESUME_FIRST_RENDER_COUNT = 100;
-  const RESUME_BACKFILL_CHUNK = 50;
+  // Phase A mitigation (worker LAZY): the previous 50-msg/0ms chunk schedule
+  // hammered the main thread during backfill of 33k-message sessions and made
+  // the composer feel laggy. Smaller chunks + a longer yield + composer-focus
+  // pause keeps typing responsive while older history dribbles in.
+  const RESUME_BACKFILL_CHUNK = 10;
+  const RESUME_BACKFILL_YIELD_MS = 50;
+  // Hard cap on how many messages the resume backfill is willing to push into
+  // the live DOM. Anything older than this stays in `resumeBuffer` (off-DOM)
+  // and the backfill chip parks at "older history paused". A future lazy
+  // window UI (Phase B) will reveal them on scroll. 1000 keeps the DOM small
+  // enough that typing / scroll stays smooth even on 33k-msg sessions.
+  const RESUME_MAX_LIVE = 1000;
+  // Flipped by the composer's focus/blur handlers. When true, scheduleBackfill
+  // re-arms itself on a longer timer so keystrokes don't compete with chunk
+  // rendering for the main thread.
+  let backfillPaused = false;
   /** Active write target — flipped during resume replay. */
   function msgsTarget(): ChatMessage[] {
     return resumeBuffering ? resumeBuffer : messages;
@@ -995,7 +1010,32 @@
       console.log("[DIAG-FE] resume backfill — complete");
       return;
     }
-    const run = () => {
+    // Phase A: cap how many messages we ever push into the live DOM. Once we
+    // hit the cap, park the rest in the off-DOM buffer and stop scheduling.
+    if (messages.length >= RESUME_MAX_LIVE) {
+      resumeBackfillRemaining = resumeBuffer.length;
+      console.log(
+        `[DIAG-FE] resume backfill — paused at DOM cap (live=${messages.length}, parked=${resumeBuffer.length})`,
+      );
+      return;
+    }
+    // Phase A: when the composer has focus, defer the next chunk on a longer
+    // timer so typing latency wins over backfill throughput.
+    if (backfillPaused) {
+      setTimeout(scheduleBackfill, 250);
+      return;
+    }
+    const run = (deadline?: IdleDeadline) => {
+      // If the idle slot is essentially gone, defer to the next slot instead
+      // of stealing the frame.
+      if (deadline && deadline.timeRemaining && deadline.timeRemaining() < 5) {
+        const idle = (window as any).requestIdleCallback as
+          | ((cb: (d: IdleDeadline) => void, opts?: { timeout?: number }) => number)
+          | undefined;
+        if (idle) idle(run, { timeout: 200 });
+        else setTimeout(scheduleBackfill, RESUME_BACKFILL_YIELD_MS);
+        return;
+      }
       const take = Math.min(RESUME_BACKFILL_CHUNK, resumeBuffer.length);
       const chunk = resumeBuffer.slice(-take);
       resumeBuffer = resumeBuffer.slice(0, -take);
@@ -1007,16 +1047,48 @@
       resumeBackfillRemaining = resumeBuffer.length;
       requestAnimationFrame(() => {
         if (el) el.scrollTop = el.scrollHeight - distFromBottom;
-        // Yield to main thread between chunks.
+        // Yield to main thread between chunks. Longer yield (50ms) so the
+        // composer keystroke queue can drain in between.
         const idle = (window as any).requestIdleCallback as
-          | ((cb: () => void, opts?: { timeout?: number }) => number)
+          | ((cb: (d: IdleDeadline) => void, opts?: { timeout?: number }) => number)
           | undefined;
-        if (idle) idle(() => scheduleBackfill(), { timeout: 200 });
-        else setTimeout(scheduleBackfill, 0);
+        if (idle) idle(run, { timeout: 200 });
+        else setTimeout(scheduleBackfill, RESUME_BACKFILL_YIELD_MS);
       });
     };
     // First chunk fires immediately; subsequent ones are scheduled by run().
     run();
+  }
+
+  /**
+   * Phase A: composer focus/blur listener. When the textarea is focused we
+   * mark backfill as paused so the next chunk waits 250ms; on blur we kick
+   * the loop back into life if there's anything left to drain. Wired via
+   * document-level capture so it works regardless of Composer's internal
+   * structure (we don't need a ref leak from Composer).
+   */
+  function onComposerFocusEvent(e: FocusEvent): void {
+    const t = e.target as HTMLElement | null;
+    if (!t) return;
+    if (t.tagName === "TEXTAREA" || (t as HTMLElement).isContentEditable) {
+      if (!backfillPaused) {
+        backfillPaused = true;
+        console.log("[DIAG-FE] resume backfill — paused (composer focus)");
+      }
+    }
+  }
+  function onComposerBlurEvent(e: FocusEvent): void {
+    const t = e.target as HTMLElement | null;
+    if (!t) return;
+    if (t.tagName === "TEXTAREA" || (t as HTMLElement).isContentEditable) {
+      if (backfillPaused) {
+        backfillPaused = false;
+        console.log("[DIAG-FE] resume backfill — resumed (composer blur)");
+        if (resumeBuffer.length > 0 && messages.length < RESUME_MAX_LIVE) {
+          scheduleBackfill();
+        }
+      }
+    }
   }
 
   function finalize() {
@@ -1868,6 +1940,12 @@
     // devtools feature is compiled in.
     window.addEventListener("contextmenu", (e) => e.preventDefault());
 
+    // Phase A: pause resume-backfill while the composer textarea is focused
+    // so keystrokes don't compete with chunk rendering for the main thread.
+    // Capture-phase so we see the focus before Composer's own handlers fire.
+    document.addEventListener("focusin", onComposerFocusEvent, true);
+    document.addEventListener("focusout", onComposerBlurEvent, true);
+
     // Worker Z: wire the checkpoints store to the local messages[] array.
     // checkpoints.ts can't touch messages[] directly (lives in this script
     // block), so it calls back through the handlers registered here.
@@ -2183,6 +2261,8 @@
     clearInterval(watchdogTimer);
     window.removeEventListener("keydown", onGlobalKeydown);
     window.removeEventListener("safe-invoke-toast", onSafeInvokeToast);
+    document.removeEventListener("focusin", onComposerFocusEvent, true);
+    document.removeEventListener("focusout", onComposerBlurEvent, true);
     for (const t of toasts) {
       if (t.timer) clearTimeout(t.timer);
     }
@@ -2480,8 +2560,12 @@
           {#if resumeBackfillRemaining > 0}
             <div class="resume-backfill-chip mono" role="status" aria-live="polite">
               <span class="spinner-dot"></span>
-              Loading older messages… ({resumeBackfillTotal - resumeBackfillRemaining}
-              of {resumeBackfillTotal})
+              {#if messages.length >= RESUME_MAX_LIVE}
+                Older history paused — {resumeBackfillRemaining.toLocaleString()} message{resumeBackfillRemaining === 1 ? "" : "s"} parked
+              {:else}
+                Loading older messages… ({resumeBackfillTotal - resumeBackfillRemaining}
+                of {resumeBackfillTotal})
+              {/if}
             </div>
           {/if}
           {#if messages.length === 0}
