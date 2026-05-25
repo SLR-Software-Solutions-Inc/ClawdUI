@@ -141,6 +141,14 @@ type InboundMessage =
   | { id: string; type: "end_session" }
   | { id: string; type: "list_sessions"; cwd: string }
   | { id: string; type: "read_session"; session_id: string; cwd: string }
+  | {
+      id: string;
+      type: "fetch_session_window";
+      session_id: string;
+      cwd: string;
+      before_seq: number;
+      limit: number;
+    }
   | { id: string; type: "delete_session"; session_id: string; cwd: string }
   | { id: string; type: "write_file"; path: string; content: string }
   | { id: string; type: "git_branch"; cwd: string }
@@ -1108,6 +1116,49 @@ async function readSession(
     if (obj) out.push(obj);
   }
   return out;
+}
+
+/**
+ * Paginated session window read.
+ *
+ * Returns up to `limit` jsonl entries whose 0-based index is in
+ * `[beforeSeq - limit, beforeSeq)`. Pass `beforeSeq <= 0` for "no upper
+ * bound" — used by the initial resume call which wants the LAST `limit`
+ * entries. The returned `total` is the full transcript length so callers
+ * can derive `oldestSeq = total - returned.length` on first call.
+ *
+ * Implementation: full read + slice. Cheaper than building a positional
+ * index since the worst-case file is ~120 MB which Node parses in <500ms
+ * on an M-series Mac. If we hit larger transcripts we can switch to a
+ * streaming line-counter with a tail buffer.
+ */
+async function fetchSessionWindow(
+  cwd: string,
+  sessionId: string,
+  beforeSeq: number,
+  limit: number,
+): Promise<{ messages: unknown[]; startSeq: number; total: number; hasMore: boolean }> {
+  const file = path.join(findSessionBucket(cwd, sessionId), `${sessionId}.jsonl`);
+  const text = await fsp.readFile(file, "utf8");
+  const lines = text.split(/\r?\n/);
+  const all: unknown[] = [];
+  for (const line of lines) {
+    if (!line) continue;
+    const obj = safeParse(line);
+    if (obj) all.push(obj);
+  }
+  const total = all.length;
+  const cap = Math.max(1, Math.min(limit | 0, 5000));
+  // beforeSeq <= 0 means "from end". Treat as `total`.
+  const upper = beforeSeq <= 0 ? total : Math.min(beforeSeq | 0, total);
+  const lower = Math.max(0, upper - cap);
+  const slice = all.slice(lower, upper);
+  return {
+    messages: slice,
+    startSeq: lower,
+    total,
+    hasMore: lower > 0,
+  };
 }
 
 async function deleteSession(
@@ -4138,6 +4189,14 @@ async function handle(req: InboundMessage): Promise<void> {
 
     case "read_session": {
       resultOrError(req.id, readSession(req.cwd, req.session_id));
+      return;
+    }
+
+    case "fetch_session_window": {
+      resultOrError(
+        req.id,
+        fetchSessionWindow(req.cwd, req.session_id, req.before_seq, req.limit),
+      );
       return;
     }
 

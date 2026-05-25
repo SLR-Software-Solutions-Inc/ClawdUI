@@ -125,7 +125,13 @@
   } from "./lib/modelContextWindow";
   import { permissions, type PermissionDecision } from "./lib/permissions.svelte";
   import { refreshSkills } from "./lib/skills";
-  import { refresh as refreshSessions, loadSessionRaw, fork as forkSessionRpc } from "./lib/sessions";
+  import { refresh as refreshSessions, fork as forkSessionRpc } from "./lib/sessions";
+  import {
+    chatWindow,
+    resetChatWindow,
+    loadInitialWindow,
+    loadMoreWindow,
+  } from "./lib/chat-window";
   // Worker Z: checkpoint + fork primitives. CheckpointDrawer is the UI;
   // registerCheckpointHandlers wires the messages[] array (owned here)
   // to the public API consumed by Worker U's /undo + /fork slash commands.
@@ -219,39 +225,18 @@
 
   let messages: ChatMessage[] = [];
   let busy = false;
-  // Progressive session-resume state. When `resumeBuffering` is true, the
-  // SDK-event handlers route writes into `resumeBuffer` (plain non-reactive
-  // array) instead of the live `messages` array. After the full jsonl has
-  // been replayed, commitResumeBuffer() splices the LAST 100 messages into
-  // `messages` (instant first paint) and backfills older history in chunks
-  // of 50 via setTimeout(0)/requestIdleCallback so the main thread stays
-  // responsive. The "Loading older messages…" chip reads
-  // resumeBackfillRemaining / resumeBackfillTotal.
-  // Large sessions (120MB / 33k+ msgs) used to freeze the UI for 30-60s
-  // because every push triggered a $state proxy update + a full re-render
-  // of every MessageBlock — see commit 84ff051 for the sidecar-side fix
-  // and this block for the FE half.
+  // Phase B paginated lazy load. On resume the sidecar streams the LAST
+  // INITIAL_LIMIT (500) jsonl entries into `resumeBuffer`. Once committed,
+  // older history is fetched on demand via fetch_session_window when the
+  // user scrolls to the top sentinel (chat-window store + IntersectionObserver
+  // — see loadMoreOlder() / setupTopObserver() below). No background
+  // backfill; the DOM grows only as the user scrolls. This replaces the
+  // Phase A "RESUME_BACKFILL_CHUNK + setTimeout(0)" eager-prefetch model
+  // which couldn't keep up on 33k-msg sessions.
   let resumeBuffering = false;
   let resumeBuffer: ChatMessage[] = [];
-  let resumeBackfillRemaining = 0;
-  let resumeBackfillTotal = 0;
-  const RESUME_FIRST_RENDER_COUNT = 100;
-  // Phase A mitigation (worker LAZY): the previous 50-msg/0ms chunk schedule
-  // hammered the main thread during backfill of 33k-message sessions and made
-  // the composer feel laggy. Smaller chunks + a longer yield + composer-focus
-  // pause keeps typing responsive while older history dribbles in.
-  const RESUME_BACKFILL_CHUNK = 10;
-  const RESUME_BACKFILL_YIELD_MS = 50;
-  // Hard cap on how many messages the resume backfill is willing to push into
-  // the live DOM. Anything older than this stays in `resumeBuffer` (off-DOM)
-  // and the backfill chip parks at "older history paused". A future lazy
-  // window UI (Phase B) will reveal them on scroll. 1000 keeps the DOM small
-  // enough that typing / scroll stays smooth even on 33k-msg sessions.
-  const RESUME_MAX_LIVE = 1000;
-  // Flipped by the composer's focus/blur handlers. When true, scheduleBackfill
-  // re-arms itself on a longer timer so keystrokes don't compete with chunk
-  // rendering for the main thread.
-  let backfillPaused = false;
+  const RESUME_INITIAL_LIMIT = 500;
+  const RESUME_OLDER_PAGE_LIMIT = 100;
   /** Active write target — flipped during resume replay. */
   function msgsTarget(): ChatMessage[] {
     return resumeBuffering ? resumeBuffer : messages;
@@ -945,150 +930,118 @@
   }
 
   /**
-   * Phase transition: idle → resuming → first-render → backfill → done.
+   * Phase B: commit the initial window (last 500 entries) to `messages`.
    *
-   * After resume replay finishes the full transcript sits in `resumeBuffer`.
-   * Commit the last RESUME_FIRST_RENDER_COUNT messages to `messages` so the
-   * user sees the chat bottom immediately; flip `resumeBuffering=false` to
-   * hide the full-screen spinner. Then progressively prepend older history
-   * in RESUME_BACKFILL_CHUNK-sized chunks via setTimeout(0)
-   * (or requestIdleCallback when available) so the main thread stays
-   * responsive. While backfill runs, a "Loading older messages…" chip
-   * at the top of the chat surfaces progress.
-   *
-   * Scroll preservation: when prepending older history above the viewport,
-   * record `scrollHeight - scrollTop` (distance from bottom) before the
-   * splice and restore it after via `requestAnimationFrame`. With chat
-   * anchored to bottom (the common case after resume), distance-from-bottom
-   * stays at 0 and the view doesn't jump.
+   * The buffer holds the converted ChatMessage shape — built by handleSdkMessage
+   * during replay of the raw jsonl entries returned by fetch_session_window.
+   * Hand it to `messages` as a single assignment so Svelte does one render pass
+   * instead of N. The chat-window store already records oldestSeq / totalSeq /
+   * done from the sidecar response; older pages come in via loadMoreOlder()
+   * when the top sentinel intersects the viewport. No background backfill.
    */
   function commitResumeBuffer(): void {
-    const total = resumeBuffer.length;
-    if (total === 0) {
-      resumeBuffering = false;
-      resumeBuffer = [];
-      return;
-    }
-    if (total <= RESUME_FIRST_RENDER_COUNT) {
-      // Small session — commit everything at once, no backfill needed.
-      messages = resumeBuffer;
-      resumeBuffer = [];
-      resumeBuffering = false;
-      resumeBackfillRemaining = 0;
-      resumeBackfillTotal = 0;
-      console.log(
-        `[DIAG-FE] resume commit — small session (${total} msgs), single-shot render`,
-      );
-      // Scroll to bottom on next frame so the latest message is visible.
-      queueMicrotask(() => {
-        scrollEl?.scrollTo({ top: scrollEl.scrollHeight });
-      });
-      return;
-    }
-    // Large session — slice tail for first paint, queue head for backfill.
-    const splitAt = total - RESUME_FIRST_RENDER_COUNT;
-    messages = resumeBuffer.slice(splitAt);
-    // Keep the older half in resumeBuffer for the backfill loop.
-    resumeBuffer = resumeBuffer.slice(0, splitAt);
-    resumeBackfillTotal = splitAt;
-    resumeBackfillRemaining = splitAt;
+    messages = resumeBuffer;
+    resumeBuffer = [];
     resumeBuffering = false;
     console.log(
-      `[DIAG-FE] resume commit — large session, first render ${RESUME_FIRST_RENDER_COUNT} of ${total}, backfilling ${splitAt}`,
+      `[DIAG-FE] resume commit — ${messages.length} messages rendered (Phase B initial window)`,
     );
     queueMicrotask(() => {
       scrollEl?.scrollTo({ top: scrollEl.scrollHeight });
-      scheduleBackfill();
+      // Sentinel-driven older-page loading kicks in once the user scrolls up.
+      setupTopObserver();
     });
   }
 
-  /** Schedule one backfill chunk; reschedules itself until buffer drained. */
-  function scheduleBackfill(): void {
-    if (resumeBuffer.length === 0) {
-      resumeBackfillRemaining = 0;
-      resumeBackfillTotal = 0;
-      console.log("[DIAG-FE] resume backfill — complete");
-      return;
+  /**
+   * Top sentinel + IntersectionObserver wiring for the Phase B lazy
+   * paginated resume. Re-created on every commit (and after end_session
+   * cleanup) so it tracks the current scrollEl. The sentinel element is
+   * the first .message DOM node — we observe THAT directly rather than
+   * inserting a 1px stub, so we don't fight the existing layout / sticky
+   * chip CSS.
+   *
+   * Threshold is 0 (any pixel intersection) with rootMargin "200px 0 0 0"
+   * so the next fetch fires slightly BEFORE the user hits the literal top
+   * — masks the round-trip and keeps the scroll feeling continuous.
+   */
+  let topObserver: IntersectionObserver | null = null;
+  let topSentinelEl: Element | null = null;
+  function teardownTopObserver(): void {
+    if (topObserver) {
+      try { topObserver.disconnect(); } catch { /* ignore */ }
+      topObserver = null;
     }
-    // Phase A: cap how many messages we ever push into the live DOM. Once we
-    // hit the cap, park the rest in the off-DOM buffer and stop scheduling.
-    if (messages.length >= RESUME_MAX_LIVE) {
-      resumeBackfillRemaining = resumeBuffer.length;
-      console.log(
-        `[DIAG-FE] resume backfill — paused at DOM cap (live=${messages.length}, parked=${resumeBuffer.length})`,
-      );
-      return;
-    }
-    // Phase A: when the composer has focus, defer the next chunk on a longer
-    // timer so typing latency wins over backfill throughput.
-    if (backfillPaused) {
-      setTimeout(scheduleBackfill, 250);
-      return;
-    }
-    const run = (deadline?: IdleDeadline) => {
-      // If the idle slot is essentially gone, defer to the next slot instead
-      // of stealing the frame.
-      if (deadline && deadline.timeRemaining && deadline.timeRemaining() < 5) {
-        const idle = (window as any).requestIdleCallback as
-          | ((cb: (d: IdleDeadline) => void, opts?: { timeout?: number }) => number)
-          | undefined;
-        if (idle) idle(run, { timeout: 200 });
-        else setTimeout(scheduleBackfill, RESUME_BACKFILL_YIELD_MS);
-        return;
-      }
-      const take = Math.min(RESUME_BACKFILL_CHUNK, resumeBuffer.length);
-      const chunk = resumeBuffer.slice(-take);
-      resumeBuffer = resumeBuffer.slice(0, -take);
-      // Preserve viewport: distance from bottom should stay constant when
-      // prepending above. record before, restore after the DOM update.
-      const el = scrollEl;
-      const distFromBottom = el ? el.scrollHeight - el.scrollTop : 0;
-      messages = [...chunk, ...messages];
-      resumeBackfillRemaining = resumeBuffer.length;
-      requestAnimationFrame(() => {
-        if (el) el.scrollTop = el.scrollHeight - distFromBottom;
-        // Yield to main thread between chunks. Longer yield (50ms) so the
-        // composer keystroke queue can drain in between.
-        const idle = (window as any).requestIdleCallback as
-          | ((cb: (d: IdleDeadline) => void, opts?: { timeout?: number }) => number)
-          | undefined;
-        if (idle) idle(run, { timeout: 200 });
-        else setTimeout(scheduleBackfill, RESUME_BACKFILL_YIELD_MS);
-      });
-    };
-    // First chunk fires immediately; subsequent ones are scheduled by run().
-    run();
+    topSentinelEl = null;
+  }
+  function setupTopObserver(): void {
+    teardownTopObserver();
+    if (!scrollEl) return;
+    const cw = $chatWindow;
+    if (cw.done) return;
+    const first = scrollEl.querySelector(".messages > [data-msg-row]:first-child");
+    if (!first) return;
+    topSentinelEl = first;
+    topObserver = new IntersectionObserver(
+      (entries) => {
+        for (const ent of entries) {
+          if (ent.isIntersecting) {
+            void loadMoreOlder();
+          }
+        }
+      },
+      { root: scrollEl, rootMargin: "200px 0px 0px 0px", threshold: 0 },
+    );
+    topObserver.observe(first);
   }
 
   /**
-   * Phase A: composer focus/blur listener. When the textarea is focused we
-   * mark backfill as paused so the next chunk waits 250ms; on blur we kick
-   * the loop back into life if there's anything left to drain. Wired via
-   * document-level capture so it works regardless of Composer's internal
-   * structure (we don't need a ref leak from Composer).
+   * Fetch the next page of older entries from the sidecar, convert them
+   * via handleSdkMessage into a temporary buffer, then prepend to messages
+   * while preserving the user's scroll position.
+   *
+   * Scroll preservation strategy: record `scrollHeight - scrollTop`
+   * BEFORE the splice → apply messages mutation → in the next animation
+   * frame, restore `scrollTop = scrollHeight - savedDistFromBottom`. The
+   * relative distance from the bottom stays constant; visually nothing
+   * jumps even though the document height grew.
    */
-  function onComposerFocusEvent(e: FocusEvent): void {
-    const t = e.target as HTMLElement | null;
-    if (!t) return;
-    if (t.tagName === "TEXTAREA" || (t as HTMLElement).isContentEditable) {
-      if (!backfillPaused) {
-        backfillPaused = true;
-        console.log("[DIAG-FE] resume backfill — paused (composer focus)");
+  async function loadMoreOlder(): Promise<void> {
+    const cwd = getSettings().cwd;
+    if (!cwd) return;
+    const cw0 = $chatWindow;
+    if (cw0.fetching || cw0.done || !cw0.sessionId) return;
+    const el = scrollEl;
+    const distFromBottom = el ? el.scrollHeight - el.scrollTop : 0;
+    const entries = await loadMoreWindow(cwd, RESUME_OLDER_PAGE_LIMIT);
+    if (entries.length === 0) {
+      // Either nothing returned or we're done. Tear down observer if done.
+      if ($chatWindow.done) teardownTopObserver();
+      return;
+    }
+    // Convert raw jsonl entries → ChatMessage shape using the same
+    // replay path used for the initial window. Route into a fresh
+    // buffer (NOT the live `messages`) by flipping resumeBuffering.
+    resumeBuffer = [];
+    resumeBuffering = true;
+    for (const entry of entries) {
+      if (entry && typeof entry === "object") {
+        handleSdkMessage(entry as Record<string, unknown>);
       }
     }
-  }
-  function onComposerBlurEvent(e: FocusEvent): void {
-    const t = e.target as HTMLElement | null;
-    if (!t) return;
-    if (t.tagName === "TEXTAREA" || (t as HTMLElement).isContentEditable) {
-      if (backfillPaused) {
-        backfillPaused = false;
-        console.log("[DIAG-FE] resume backfill — resumed (composer blur)");
-        if (resumeBuffer.length > 0 && messages.length < RESUME_MAX_LIVE) {
-          scheduleBackfill();
-        }
-      }
+    for (const m of resumeBuffer) {
+      if (m.streaming) m.streaming = false;
     }
+    const prepend = resumeBuffer;
+    resumeBuffer = [];
+    resumeBuffering = false;
+    messages = [...prepend, ...messages];
+    requestAnimationFrame(() => {
+      if (el) el.scrollTop = el.scrollHeight - distFromBottom;
+      // Re-attach observer to the NEW first .message row, since the old
+      // sentinel is now in the middle of the list.
+      setupTopObserver();
+    });
   }
 
   function finalize() {
@@ -1399,6 +1352,8 @@
     compactSuggested = false;
     compactForced = false;
     editingIndex = null;
+    teardownTopObserver();
+    resetChatWindow();
     (window as any).__clawdui_agents_seen = new Set<string>();
 
     // If resuming a prior session, replay its on-disk transcript into the
@@ -1407,19 +1362,22 @@
     // actually has a cwd to read from — the SDK still attempts the resume
     // server-side regardless.
     //
-    // Large sessions (120MB / 33k+ msgs) used to freeze the UI for 30-60s.
-    // Now we replay into a non-reactive buffer, then splice the LAST 100
-    // into `messages` for instant first paint, and backfill the rest in
-    // 50-msg chunks via setTimeout(0). See commitResumeBuffer() below.
+    // Phase B: pull only the LAST RESUME_INITIAL_LIMIT (500) entries via
+    // fetch_session_window. The chat-window store records totalSeq /
+    // oldestSeq so older history can be lazily fetched when the user
+    // scrolls to the top sentinel. See commitResumeBuffer() and
+    // loadMoreOlder() below.
     const resumeId = getSettings().resume;
-    if (resumeId && getSettings().cwd) {
+    const resumeCwd = getSettings().cwd;
+    if (resumeId && resumeCwd) {
       try {
         resumeBuffering = true;
         resumeBuffer = [];
-        resumeBackfillRemaining = 0;
-        resumeBackfillTotal = 0;
-        console.log(`[DIAG-FE] resume(${resumeId}) — loading session jsonl`);
-        const raw = await loadSessionRaw(resumeId);
+        resetChatWindow();
+        console.log(
+          `[DIAG-FE] resume(${resumeId}) — fetching initial window (limit=${RESUME_INITIAL_LIMIT})`,
+        );
+        const raw = await loadInitialWindow(resumeCwd, resumeId, RESUME_INITIAL_LIMIT);
         console.log(
           `[DIAG-FE] resume(${resumeId}) — replaying ${raw.length} jsonl entries into buffer`,
         );
@@ -1433,12 +1391,13 @@
           if (m.streaming) m.streaming = false;
         }
         console.log(
-          `[DIAG-FE] resume(${resumeId}) — buffer holds ${resumeBuffer.length} msgs, committing last ${RESUME_FIRST_RENDER_COUNT}`,
+          `[DIAG-FE] resume(${resumeId}) — buffer holds ${resumeBuffer.length} msgs, committing`,
         );
         commitResumeBuffer();
       } catch (err) {
         resumeBuffering = false;
         resumeBuffer = [];
+        resetChatWindow();
         // Stale resume id — likely the session file was deleted. Clear so
         // the next newSession() starts fresh instead of replaying ghosts.
         patchSettings({ resume: undefined });
@@ -1940,11 +1899,9 @@
     // devtools feature is compiled in.
     window.addEventListener("contextmenu", (e) => e.preventDefault());
 
-    // Phase A: pause resume-backfill while the composer textarea is focused
-    // so keystrokes don't compete with chunk rendering for the main thread.
-    // Capture-phase so we see the focus before Composer's own handlers fire.
-    document.addEventListener("focusin", onComposerFocusEvent, true);
-    document.addEventListener("focusout", onComposerBlurEvent, true);
+    // Phase B: composer-focus pause is no longer needed — older messages
+    // are fetched on demand (scroll-up), not on a setTimeout chunk loop,
+    // so keystrokes can't compete with backfill anymore.
 
     // Worker Z: wire the checkpoints store to the local messages[] array.
     // checkpoints.ts can't touch messages[] directly (lives in this script
@@ -2261,8 +2218,7 @@
     clearInterval(watchdogTimer);
     window.removeEventListener("keydown", onGlobalKeydown);
     window.removeEventListener("safe-invoke-toast", onSafeInvokeToast);
-    document.removeEventListener("focusin", onComposerFocusEvent, true);
-    document.removeEventListener("focusout", onComposerBlurEvent, true);
+    teardownTopObserver();
     for (const t of toasts) {
       if (t.timer) clearTimeout(t.timer);
     }
@@ -2557,16 +2513,21 @@
           </div>
         </div>
         <div class="messages" class:centered={messages.length === 0} bind:this={scrollEl}>
-          {#if resumeBackfillRemaining > 0}
-            <div class="resume-backfill-chip mono" role="status" aria-live="polite">
-              <span class="spinner-dot"></span>
-              {#if messages.length >= RESUME_MAX_LIVE}
-                Older history paused — {resumeBackfillRemaining.toLocaleString()} message{resumeBackfillRemaining === 1 ? "" : "s"} parked
-              {:else}
-                Loading older messages… ({resumeBackfillTotal - resumeBackfillRemaining}
-                of {resumeBackfillTotal})
-              {/if}
-            </div>
+          {#if $chatWindow.sessionId && messages.length > 0 && $chatWindow.totalSeq > RESUME_INITIAL_LIMIT}
+            {#if $chatWindow.fetching}
+              <div class="resume-backfill-chip mono" role="status" aria-live="polite">
+                <span class="spinner-dot"></span>
+                Loading older messages…
+              </div>
+            {:else if $chatWindow.done}
+              <div class="resume-backfill-chip mono done" role="status" aria-live="polite">
+                Beginning of conversation
+              </div>
+            {:else}
+              <div class="resume-backfill-chip mono idle" role="status" aria-live="polite">
+                Scroll up to load older messages ({$chatWindow.oldestSeq.toLocaleString()} earlier)
+              </div>
+            {/if}
           {/if}
           {#if messages.length === 0}
             <div class="hero">
@@ -2599,15 +2560,17 @@
             </div>
           {:else}
             {#each messages as msg, i (i)}
-              <MessageBlock
-                message={msg}
-                view="master"
-                on:quote={(e) => composer?.insertText(e.detail.text)}
-                on:regenerate={() => void regenerateLastTurn(i)}
-                on:edit={(e) => editUserMessage(i, e.detail.text)}
-                on:resend={(e) => void resendUserMessage(i, e.detail.text)}
-                on:cancel-queued={(e) => cancelQueuedPrompt(e.detail.queueId)}
-              />
+              <div data-msg-row class="msg-row">
+                <MessageBlock
+                  message={msg}
+                  view="master"
+                  on:quote={(e) => composer?.insertText(e.detail.text)}
+                  on:regenerate={() => void regenerateLastTurn(i)}
+                  on:edit={(e) => editUserMessage(i, e.detail.text)}
+                  on:resend={(e) => void resendUserMessage(i, e.detail.text)}
+                  on:cancel-queued={(e) => cancelQueuedPrompt(e.detail.queueId)}
+                />
+              </div>
             {/each}
             {#if busy}
               <div class="thinking-row mono" class:stalled>
