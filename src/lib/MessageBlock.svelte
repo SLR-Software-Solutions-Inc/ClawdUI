@@ -25,7 +25,11 @@
   export let message: ChatMessage;
   // "master" hides spawn-child tool noise (Agent / spawn_child / Task) and
   // replaces it with a single delegation chip. "child" shows everything.
-  export let view: "master" | "child" = "master";
+  // "chat" is the cleanest surface — only user prompts + assistant text
+  // blocks render. Tool_use / tool_result / thinking / DELEGATED /
+  // CHILD-RETURNED chips are dropped (they belong in the bottom drawer's
+  // mechanic view).
+  export let view: "master" | "child" | "chat" = "master";
 
   const dispatch = createEventDispatcher();
 
@@ -243,7 +247,7 @@
             {/if}
           {/each}{#if message.streaming && i === message.blocks.length - 1}<span class="cursor">▌</span>{/if}
         </div>
-      {:else if block.type === "thinking"}
+      {:else if block.type === "thinking" && view !== "chat"}
         <details class="block thinking">
           <summary><span class="block-tag mono">THINKING</span></summary>
           <pre class="mono">{block.text}</pre>
@@ -274,7 +278,7 @@
           <span class="chip-tag">CHILD RETURNED</span>
           <span class="chip-desc">{shortText(block.content, 100)}</span>
         </button>
-      {:else if block.type === "tool_use"}
+      {:else if block.type === "tool_use" && view !== "chat"}
         {@const summary = summarizeToolUse(block.name, block.input)}
         <details class="block tool-use" class:denied={!!permissions.denied[block.id]}>
           <summary>
@@ -304,7 +308,7 @@
         <!-- Pending permission ask attached to this tool call — replaces the
              full-screen modal for everything except bypassPermissions mode. -->
         <InlinePermissionCard toolUseId={block.id} />
-      {:else if block.type === "tool_result"}
+      {:else if block.type === "tool_result" && view !== "chat"}
         <details class="block tool-result">
           <summary>
             <span class="block-tag mono">RESULT</span>

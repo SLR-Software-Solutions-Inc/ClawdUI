@@ -224,6 +224,26 @@
     | PermissionRequestEvent;
 
   let messages: ChatMessage[] = [];
+  // Main-chat visibility gate. The main scrollback renders only the
+  // "natural conversation":
+  //   - user prompts (always — even empty/preamble-only prompts still
+  //     produce a "user-said" bubble so legitimate sends aren't hidden)
+  //   - assistant turns that contain at least one text block (so a
+  //     tool-only turn doesn't render an empty bubble; the "agent
+  //     working · MM:SS" pill covers that visual state)
+  // Tool calls, results, thinking, hooks, DELEGATED / CHILD-RETURNED
+  // chips all live in the bottom AgentDrawer / FleetView instead.
+  function isVisibleInMainChat(msg: ChatMessage): boolean {
+    if (msg.role === "user") return true;
+    if (msg.role === "assistant") {
+      // Streaming assistant turns can have an empty text block briefly
+      // before the first chunk arrives — still keep the bubble so
+      // streaming text appears as it comes in. We accept any text block
+      // (empty or not) here, but reject turns with zero text blocks.
+      return (msg.blocks ?? []).some((b) => b.type === "text");
+    }
+    return false; // drop system + tool-only role rows from main chat
+  }
   let busy = false;
   // Phase B paginated lazy load. On resume the sidecar streams the LAST
   // INITIAL_LIMIT (500) jsonl entries into `resumeBuffer`. Once committed,
@@ -2560,17 +2580,19 @@
             </div>
           {:else}
             {#each messages as msg, i (i)}
-              <div data-msg-row class="msg-row">
-                <MessageBlock
-                  message={msg}
-                  view="master"
-                  on:quote={(e) => composer?.insertText(e.detail.text)}
-                  on:regenerate={() => void regenerateLastTurn(i)}
-                  on:edit={(e) => editUserMessage(i, e.detail.text)}
-                  on:resend={(e) => void resendUserMessage(i, e.detail.text)}
-                  on:cancel-queued={(e) => cancelQueuedPrompt(e.detail.queueId)}
-                />
-              </div>
+              {#if isVisibleInMainChat(msg)}
+                <div data-msg-row class="msg-row">
+                  <MessageBlock
+                    message={msg}
+                    view="chat"
+                    on:quote={(e) => composer?.insertText(e.detail.text)}
+                    on:regenerate={() => void regenerateLastTurn(i)}
+                    on:edit={(e) => editUserMessage(i, e.detail.text)}
+                    on:resend={(e) => void resendUserMessage(i, e.detail.text)}
+                    on:cancel-queued={(e) => cancelQueuedPrompt(e.detail.queueId)}
+                  />
+                </div>
+              {/if}
             {/each}
             {#if busy}
               <div class="thinking-row mono" class:stalled>
