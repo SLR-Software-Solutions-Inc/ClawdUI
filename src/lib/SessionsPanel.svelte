@@ -84,13 +84,28 @@
   }
 
   async function onResume(s: SessionSummary): Promise<void> {
+    // Cross-bucket pivot: the session may have been recorded in a parent /
+    // sibling cwd (e.g. bare-repo + worktrees layout where the workspace was
+    // opened at `worktrees/` but the session lives in the project root).
+    // Pivot the workspace cwd BEFORE dispatching session-action so the parent's
+    // newSession() call sees the correct cwd and the SDK can locate the jsonl.
+    // The sidecar additionally re-resolves cwd from the session file as a
+    // belt-and-suspenders defense.
     resume(s.id);
-    dispatch("session-action", { kind: "resume", id: s.id });
+    if (s.cwd && s.cwd !== $settings.cwd) {
+      dispatch("pivot-cwd", { path: s.cwd, branch: s.branch ?? null });
+    } else {
+      dispatch("session-action", { kind: "resume", id: s.id });
+    }
   }
 
   async function onFork(s: SessionSummary): Promise<void> {
     fork(s.id);
-    dispatch("session-action", { kind: "fork", id: s.id });
+    if (s.cwd && s.cwd !== $settings.cwd) {
+      dispatch("pivot-cwd", { path: s.cwd, branch: s.branch ?? null });
+    } else {
+      dispatch("session-action", { kind: "fork", id: s.id });
+    }
   }
 
   async function onDelete(s: SessionSummary): Promise<void> {

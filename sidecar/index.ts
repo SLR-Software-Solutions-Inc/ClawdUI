@@ -951,6 +951,54 @@ function sessionBucketsFor(cwd: string): string[] {
   return [...buckets];
 }
 
+/**
+ * Locate `<id>.jsonl` anywhere under `~/.claude/projects/*` and return the
+ * canonical cwd recorded on the session's first event. Returns `null` when
+ * the session file is missing or the cwd cannot be read.
+ *
+ * This is the AUTHORITATIVE cwd for a resume — we never guess by reversing
+ * `sanitizeCwd()` (lossy when the original path contains `-`). The CLI writes
+ * `cwd: <abs path>` on the first user event in every jsonl, so prefer that.
+ */
+function resolveResumeBucketAndCwd(
+  sessionId: string,
+): { bucket: string; cwd: string } | null {
+  const root = path.join(os.homedir(), ".claude", "projects");
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(root);
+  } catch {
+    return null;
+  }
+  const file = `${sessionId}.jsonl`;
+  for (const name of entries) {
+    const bucket = path.join(root, name);
+    const full = path.join(bucket, file);
+    if (!fs.existsSync(full)) continue;
+    // Read first ~16KB and scan for the first record with a `cwd` field.
+    try {
+      const fd = fs.openSync(full, "r");
+      const buf = Buffer.alloc(16 * 1024);
+      const n = fs.readSync(fd, buf, 0, buf.length, 0);
+      fs.closeSync(fd);
+      const head = buf.slice(0, n).toString("utf8");
+      for (const line of head.split(/\r?\n/)) {
+        if (!line) continue;
+        const obj = safeParse(line);
+        if (obj && typeof (obj as Record<string, unknown>).cwd === "string") {
+          const c = (obj as Record<string, unknown>).cwd as string;
+          if (c) return { bucket, cwd: c };
+        }
+      }
+      // Fall through: file exists but no cwd field discovered in the head.
+      return { bucket, cwd: "" };
+    } catch {
+      return { bucket, cwd: "" };
+    }
+  }
+  return null;
+}
+
 async function listSessions(cwd: string): Promise<SessionSummary[]> {
   const buckets = sessionBucketsFor(cwd);
   const out: SessionSummary[] = [];
@@ -3503,9 +3551,16 @@ async function handle(req: InboundMessage): Promise<void> {
       return;
 
     case "start_session": {
-      if (getMain()) {
-        emit({ id: req.id, type: "error", error: "session already active" });
-        return;
+      // Serialize against a still-active master. Front-end already calls
+      // end_session + waits for `session_ended` before re-issuing start, but
+      // races (event drop, double-click, HMR reload) can leave master alive.
+      // Tear it down synchronously instead of bouncing with an error — the
+      // caller has no way to recover from "session already active" mid-flow.
+      const existing = getMain();
+      if (existing) {
+        for (const [, sess] of sessions) sess.end();
+        sessions.clear();
+        emit({ id: req.id, type: "session_ended", session_id: "master" });
       }
       // When the sidecar is bundled (esbuild produces a single dist/index.js),
       // @anthropic-ai/claude-agent-sdk loses its dynamic require resolution
@@ -3515,6 +3570,34 @@ async function handle(req: InboundMessage): Promise<void> {
       // `pathToClaudeCodeExecutable` so the SDK never resolves its own bundled
       // fallback.
       const opts: Options = { ...(req.options ?? {}) };
+      // Cross-bucket resume: when the caller passed `resume: <id>` but the
+      // jsonl for that id lives in a DIFFERENT bucket than `sanitizeCwd(opts.cwd)`
+      // (common with bare-repo + worktrees layouts where the workspace is a
+      // sibling of the dir that originally spawned the session), the SDK's
+      // native CLI looks at the wrong bucket and emits
+      // "No conversation found with session ID". Locate the session file
+      // anywhere under ~/.claude/projects/* and pin `opts.cwd` to the cwd
+      // recorded on the session's first event — the canonical mapping.
+      const resumeId = (opts as { resume?: unknown }).resume;
+      if (typeof resumeId === "string" && resumeId) {
+        const located = resolveResumeBucketAndCwd(resumeId);
+        if (!located) {
+          emit({
+            id: req.id,
+            type: "error",
+            error: `Session ${resumeId} not found in any bucket under ~/.claude/projects/. Refresh the sessions list or pick a different session.`,
+          });
+          return;
+        }
+        if (located.cwd && located.cwd !== (opts as { cwd?: string }).cwd) {
+          console.error(
+            `[resume] sessionId=${resumeId} bucket=${path.basename(
+              located.bucket,
+            )} resolvedCwd=${located.cwd}`,
+          );
+          (opts as { cwd?: string }).cwd = located.cwd;
+        }
+      }
       // Validate workspace cwd BEFORE the SDK spawns. posix_spawn returns
       // ENOENT for a missing chdir target but Node attributes the error to
       // the command path, so the SDK then mis-reports it as a missing binary.
