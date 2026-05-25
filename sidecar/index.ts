@@ -451,6 +451,90 @@ function logProbe(line: string): void {
   }
 }
 
+// Hard cap on a single emitted line. The Tauri host reads stdout via
+// BufReader::lines() which allocates a String per line; multi-MB lines
+// quintuple memory + stall the reader thread on the subsequent
+// serde_json::from_str. The frontend never renders payloads this large
+// (>256KB), so truncating defensively before write is safe.
+//
+// Empirically the runtime hang reproduces with resume of large jsonls
+// where the SDK replays many large `message` records back-to-back: the
+// kernel pipe buffer (~64KB on macOS) fills, the kernel blocks
+// process.stdout.write, Node's internal Writable queues bytes in V8
+// heap, and the event loop is starved by GC long before the Rust
+// reader thread drains. Truncation keeps individual writes well below
+// the pipe HWM so backpressure stays bounded.
+const MAX_EMIT_BYTES = 256 * 1024; // 256 KB per line
+// Hooks can emit very large captured stdout/stderr blobs (e.g. a hook
+// that dumps a build log). The UI only renders the head/tail in the
+// HooksDebugger panel — anything past a few KB is wasted bandwidth.
+const MAX_HOOK_OUTPUT_BYTES = 8 * 1024;
+
+/**
+ * Trim an emitted event in-place so the serialized JSON line stays
+ * under MAX_EMIT_BYTES. We mutate a shallow copy so the original record
+ * (used elsewhere — e.g. forwarded to the relay below) is untouched.
+ */
+function truncateEventForStdout(ev: OutboundEvent): OutboundEvent {
+  // Cheap path: small events skip the JSON.stringify cost.
+  try {
+    const probe = JSON.stringify(ev);
+    if (probe.length <= MAX_EMIT_BYTES) return ev;
+  } catch {
+    return ev;
+  }
+  // Mutable shallow copy keyed only when type matches a known heavy event.
+  const shallow: Record<string, unknown> = { ...(ev as unknown as Record<string, unknown>) };
+  if (shallow.type === "hook-event") {
+    const out = (shallow.output as string | undefined) ?? "";
+    if (typeof out === "string" && out.length > MAX_HOOK_OUTPUT_BYTES) {
+      shallow.output =
+        out.slice(0, MAX_HOOK_OUTPUT_BYTES) + `\n[truncated ${out.length - MAX_HOOK_OUTPUT_BYTES} bytes]`;
+    }
+  } else if (shallow.type === "message") {
+    // Deep-replace any oversized text/content blocks inside the SDK
+    // message envelope. We don't validate the SDK schema here — best
+    // effort serialize-with-replacer fallback below.
+    try {
+      const serialized = JSON.stringify(shallow.message);
+      if (serialized.length > MAX_EMIT_BYTES) {
+        shallow.message = {
+          __truncated: true,
+          __originalBytes: serialized.length,
+          preview: serialized.slice(0, MAX_EMIT_BYTES / 2),
+          note: "payload truncated by sidecar IPC guard",
+        };
+      }
+    } catch {
+      /* leave as-is */
+    }
+  }
+  return shallow as unknown as OutboundEvent;
+}
+
+/**
+ * Backpressure-aware stdout write. Returns a Promise that resolves once
+ * the kernel pipe has accepted the bytes (or once the next 'drain' fires
+ * if the Writable's internal buffer is full). emit() awaits this so a
+ * stalled Tauri reader can't blow up V8 heap with queued writes.
+ */
+function writeStdoutLine(line: string): Promise<void> {
+  return new Promise((resolve) => {
+    const ok = process.stdout.write(line);
+    if (ok) {
+      resolve();
+    } else {
+      process.stdout.once("drain", () => resolve());
+    }
+  });
+}
+
+// Single-flight queue so emit() callers never interleave partial lines
+// on stdout when one is awaiting drain. Each enqueue waits for the
+// previous write to clear. Failures are swallowed — losing a line is
+// preferable to hanging the SDK consume loop.
+let emitQueue: Promise<void> = Promise.resolve();
+
 function emit(ev: OutboundEvent): void {
   // [DIAG] outbound event trace — keep until session-resume flow stabilized.
   try {
@@ -466,7 +550,11 @@ function emit(ev: OutboundEvent): void {
   } catch {
     /* never let diag break emit */
   }
-  process.stdout.write(JSON.stringify(ev) + "\n");
+  const safe = truncateEventForStdout(ev);
+  const line = JSON.stringify(safe) + "\n";
+  emitQueue = emitQueue.then(() => writeStdoutLine(line)).catch(() => {
+    /* never let one failed write stall the queue */
+  });
   // Tee to relay so remote peers see the same event stream as the local UI.
   // Skip relay-state events themselves to avoid feedback loops.
   if (relay && ev.type !== "remote_control_state") {

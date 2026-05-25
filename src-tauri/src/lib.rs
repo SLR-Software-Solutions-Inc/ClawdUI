@@ -277,13 +277,26 @@ fn spawn_sidecar(app: &AppHandle) -> Result<Sidecar, String> {
     let app_out = app.clone();
     let log_out = logger.clone();
     thread::spawn(move || {
-        let reader = BufReader::new(stdout);
+        // Default BufReader capacity is 8 KB which is fine for typical
+        // RPC traffic but triggers repeated growth-reallocation on a
+        // single multi-hundred-KB line (e.g. a `message` event carrying
+        // an SDK assistant payload during resume replay). Pre-size to
+        // 1 MB so the common large-line case is a single copy.
+        let reader = BufReader::with_capacity(1024 * 1024, stdout);
         for line in reader.lines().map_while(Result::ok) {
             if line.trim().is_empty() {
                 continue;
             }
             if let Some(l) = &log_out {
-                l.append("stdout", &line);
+                // [DIAG] truncate log writes to keep the on-disk log
+                // bounded even when individual events are large. The
+                // sidecar caps emit at ~256 KB so this is a belt-and-
+                // suspenders guard.
+                if line.len() > 4096 {
+                    l.append("stdout", &format!("{}…[+{} bytes]", &line[..4096], line.len() - 4096));
+                } else {
+                    l.append("stdout", &line);
+                }
             }
             let payload: serde_json::Value =
                 serde_json::from_str(&line).unwrap_or_else(|_| serde_json::json!({"raw": line}));
