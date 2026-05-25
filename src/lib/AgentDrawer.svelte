@@ -134,18 +134,27 @@
     }
   }
 
-  // Drawer is INDEPENDENT of the main view's active agent. The root agent
-  // never appears here — only children. Default selection is the most recent
-  // child.
+  // Drawer is INDEPENDENT of the main view's active agent. We include the
+  // master ("Main") tab FIRST, then children. The master tab is essential
+  // because the main chat hides tool_use / tool_result / thinking blocks —
+  // without it, the master agent's mechanics had nowhere to surface.
+  // Default selection: master when no children, otherwise the most recent
+  // child (so a working solo session naturally opens to master's tools).
   let children = $derived(getChildren());
+  let master = $derived(getAgent("master"));
+  let agents = $derived<Agent[]>(
+    master ? [master, ...children] : [...children],
+  );
   let runningCount = $derived(
     children.filter((a) => a.status === "running").length,
   );
+  // Count children only — "main" is always present, not a meaningful tally.
   let totalCount = $derived(children.length);
   let activeId = $derived.by(() => {
     const cur = $drawerActiveId;
-    if (cur && children.some((c) => c.id === cur)) return cur;
-    return children.length > 0 ? children[children.length - 1].id : null;
+    if (cur && agents.some((a) => a.id === cur)) return cur;
+    if (children.length > 0) return children[children.length - 1].id;
+    return master ? master.id : null;
   });
   let activeAgent = $derived(activeId ? getAgent(activeId) : undefined);
 </script>
@@ -170,9 +179,9 @@
   >
     <span class="strip-label">
       {#if totalCount === 0}
-        no child agents yet
+        main + no children yet
       {:else}
-        {totalCount} child{totalCount === 1 ? "" : "ren"} · {runningCount} running
+        main + {totalCount} child{totalCount === 1 ? "" : "ren"} · {runningCount} running
       {/if}
     </span>
     <span class="caret" aria-hidden="true">
@@ -219,12 +228,31 @@
         onpointerup={onHandlePointerUp}
         onpointercancel={onHandlePointerUp}
       ></div>
-      {#if children.length === 0}
+      {#if agents.length === 0}
         <div class="empty mono">
           The main agent will surface child agents here when it delegates.
         </div>
       {:else}
         <nav class="inner-tabs mono" aria-label="Drawer agents">
+          <!-- Master ("Main") first; children after in most-recent-first order
+               so the freshest delegation is next to Main. -->
+          {#each agents.slice(0, 1) as a (a.id)}
+            <button
+              type="button"
+              class="inner-tab is-master"
+              class:active={a.id === activeId}
+              onclick={() => setDrawerActiveId(a.id)}
+              title={`Main agent — ${a.status}`}
+            >
+              <span
+                class={statusClass(a.status)}
+                aria-label={`status: ${a.status}`}
+              >
+                {#if a.status === "done"}✓{:else if a.status === "error"}!{/if}
+              </span>
+              <span>Main</span>
+            </button>
+          {/each}
           {#each [...children].reverse() as a (a.id)}
             <button
               type="button"
@@ -457,6 +485,13 @@
     background: var(--accent-soft);
     border-color: var(--accent);
     color: var(--fg);
+  }
+  /* Master ("Main") tab — distinguished by a left accent bar so the user
+     knows root-level. Stays visually distinct whether active or not. */
+  .inner-tab.is-master {
+    border-left: 3px solid var(--accent);
+    padding-left: 6px;
+    font-weight: 600;
   }
   /* Shape + glyph distinguishes status for color-blind users — matches AgentTabs. */
   .dot {

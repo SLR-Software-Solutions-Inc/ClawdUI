@@ -351,18 +351,19 @@
     : null;
   let stderrLines: string[] = [];
 
-  // Watchdog: track per-turn timing so we can show elapsed time and detect
-  // stalls (no sidecar event for 30s while busy). Diag panel surfaces the
-  // sidecar's tail-of-stderr so the user can see why it hung instead of
-  // staring at the cursor for hours.
+  // Watchdog: track per-turn timing so we can show elapsed time and surface
+  // a Force-stop escape after a long idle. We DON'T call this "stalled" in
+  // the UI any more — long-running tool chains are normal in agent work and
+  // alarming language confused users. The threshold (>60s idle) only gates
+  // the Force-stop button + sidecar-log toggle; the elapsed timer reads
+  // "agent working · MM:SS" the whole time.
   let turnStartAt: number | null = null;
   let lastEventAt: number | null = null;
   let nowTick: number = Date.now();
   let stalledOpen = false;
-  const STALL_MS = 30_000;
+  const STALL_MS = 60_000;
   $: busyMs = busy && turnStartAt ? nowTick - turnStartAt : 0;
   $: idleMs = busy && lastEventAt ? nowTick - lastEventAt : 0;
-  $: stalled = busy && idleMs > STALL_MS;
   function fmtElapsed(ms: number): string {
     const s = Math.floor(ms / 1000);
     const mm = Math.floor(s / 60);
@@ -2595,30 +2596,24 @@
               {/if}
             {/each}
             {#if busy}
-              <div class="thinking-row mono" class:stalled>
+              <div class="thinking-row mono">
                 <span class="dot"></span>
-                {#if stalled}
-                  <span>agent <span class="stalled-word">stalled</span> · {fmtElapsed(busyMs)}</span>
-                  <span class="idle">idle {fmtElapsed(idleMs)}</span>
-                {:else}
-                  <span>agent working · {fmtElapsed(busyMs)}</span>
-                {/if}
+                <span>agent working · {fmtElapsed(busyMs)}</span>
                 <span class="cursor">▌</span>
-                {#if stalled}
+                {#if idleMs > STALL_MS}
+                  <!-- Idle escape hatch: after 60s with no sidecar event the
+                       Force-stop button + sidecar-log toggle appear so a user
+                       can actually kill a genuinely stuck turn. We keep the
+                       LANGUAGE non-alarming — long tool chains are normal. -->
                   <button class="diag-btn" type="button" on:click={() => void interrupt()}>
                     Force stop
                   </button>
                   <button class="diag-btn" type="button" on:click={() => (stalledOpen = !stalledOpen)}>
                     {stalledOpen ? "Hide" : "Show"} sidecar log
                   </button>
-                  <span
-                    class="stall-sliver"
-                    aria-hidden="true"
-                    style="--stall-fill: {Math.min(idleMs / (STALL_MS * 4), 1)}"
-                  ></span>
                 {/if}
               </div>
-              {#if stalled && stalledOpen}
+              {#if idleMs > STALL_MS && stalledOpen}
                 <pre class="stderr-block mono">{stderrLines.length > 0 ? stderrLines.slice(-30).join("\n") : "(no stderr captured — sidecar is silent)"}</pre>
               {/if}
             {/if}
@@ -3573,46 +3568,6 @@
     animation: pulse-ring 1.5s var(--ease) infinite;
     color: var(--accent);
     flex: 0 0 auto;
-  }
-  /* Stalled state: keep the row neutral; only the word "stalled" reads red. */
-  .thinking-row.stalled {
-    color: var(--fg-2);
-    border-color: var(--border);
-  }
-  .thinking-row.stalled .dot {
-    background: var(--danger);
-    color: var(--danger);
-    animation-duration: 0.8s;
-  }
-  .thinking-row .stalled-word {
-    color: var(--danger);
-    font-weight: 600;
-    letter-spacing: 0.02em;
-  }
-  .thinking-row .idle {
-    color: var(--fg-3);
-    font-size: 12px;
-    letter-spacing: 0.04em;
-  }
-  /* Subtle 2px sliver beneath the row that grows from 0 → 1 with idle time.
-     Not red — just a soft fg-3 progress hint. */
-  .stall-sliver {
-    position: absolute;
-    left: 8px;
-    right: 8px;
-    bottom: -3px;
-    height: 2px;
-    border-radius: 2px;
-    background: linear-gradient(
-      to right,
-      var(--fg-3) 0%,
-      var(--fg-3) calc(var(--stall-fill, 0) * 100%),
-      transparent calc(var(--stall-fill, 0) * 100%),
-      transparent 100%
-    );
-    opacity: 0.55;
-    pointer-events: none;
-    transition: background 240ms var(--ease, ease);
   }
   .diag-btn {
     background: transparent;
