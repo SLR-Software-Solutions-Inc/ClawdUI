@@ -707,14 +707,49 @@ function projectsDir(cwd: string): string {
 
 type SessionSummary = {
   id: string;
+  /** First 8 chars of id — for compact display. */
+  idShort: string;
+  /** Display title: customName ?? firstUserPrompt ?? idShort. */
   title: string;
+  /** User-set name via /name (custom-title record) — null if absent. */
+  customName: string | null;
+  /** First real user prompt (skips <local-command-caveat> preamble), trimmed to 80 chars. */
+  firstUserPrompt: string;
   firstMessage: string;
   lastMessage: string;
   messageCount: number;
   totalCostUsd: number;
   model?: string;
   mtime: number;
+  /** cwd recorded on the session's first user event. */
+  cwd?: string;
+  /** Last 2 path segments of cwd (e.g. apps/heartbeat-for-couple). */
+  cwdTail?: string;
 };
+
+function tailSegments(p: string, n: number): string {
+  if (!p) return "";
+  const parts = p.split("/").filter(Boolean);
+  return parts.slice(-n).join("/");
+}
+
+function isPreamble(text: string): boolean {
+  const t = text.trimStart();
+  if (!t) return true;
+  // System / harness preambles that should not surface as "first user prompt".
+  return (
+    t.startsWith("<local-command-caveat>") ||
+    t.startsWith("<command-name>") ||
+    t.startsWith("<command-message>") ||
+    t.startsWith("<system-reminder>") ||
+    t.startsWith("Caveat:") ||
+    t.startsWith("[Request interrupted")
+  );
+}
+
+function stripLeadingHeading(text: string): string {
+  return text.replace(/^\s*#{1,6}\s+/, "");
+}
 
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -772,17 +807,40 @@ async function summarizeSession(
 ): Promise<SessionSummary | null> {
   try {
     const stat = await fsp.stat(filePath);
-    const { head, tail, total } = await readFirstAndLastLines(filePath, 5, 5);
+    // Pull more head lines so we can scan past system preambles
+    // (`<local-command-caveat>`, `<command-name>`, etc.) before locking onto
+    // the first real user prompt. Sidechain detection lives on the first
+    // user/attachment event near the top of the file.
+    const { head, tail, total } = await readFirstAndLastLines(filePath, 25, 5);
     const all = [...head, ...tail];
 
     let firstUserText = "";
+    let firstUserPromptText = "";
     let lastAssistantText = "";
     let model: string | undefined;
     let totalCostUsd = 0;
+    let customName: string | null = null;
+    let cwd: string | undefined;
+    let isChild = false;
 
     for (const line of all) {
       const obj = safeParse(line);
       if (!obj) continue;
+      // Detect child / sub-agent sessions. These exist when the CLI was
+      // spawned by a parent session's Task tool. Filtering at list level
+      // only — resume of a known id still works.
+      if (obj.isSidechain === true) isChild = true;
+      if (typeof obj.parentToolUseId === "string" && obj.parentToolUseId) {
+        isChild = true;
+      }
+      if (typeof obj.parent_tool_use_id === "string" && obj.parent_tool_use_id) {
+        isChild = true;
+      }
+      // custom-title record carries the user-supplied /name value.
+      if (obj.type === "custom-title" && typeof obj.customTitle === "string") {
+        customName = obj.customTitle.trim() || null;
+      }
+      if (!cwd && typeof obj.cwd === "string") cwd = obj.cwd;
       // SDK records can be at top-level or nested under "message"
       const role =
         (obj.role as string | undefined) ??
@@ -795,6 +853,16 @@ async function summarizeSession(
       const text = extractText(content);
       if (!firstUserText && (obj.type === "user" || role === "user") && text) {
         firstUserText = text;
+      }
+      // Skip system / harness preambles when picking the "first user prompt"
+      // to display. We keep scanning until we find a real user message.
+      if (
+        !firstUserPromptText &&
+        (obj.type === "user" || role === "user") &&
+        text &&
+        !isPreamble(text)
+      ) {
+        firstUserPromptText = stripLeadingHeading(text);
       }
       if (
         (obj.type === "assistant" || role === "assistant") &&
@@ -813,22 +881,31 @@ async function summarizeSession(
       if (typeof cost === "number") totalCostUsd = cost;
     }
 
+    if (isChild) return null;
+
     const truncate = (s: string, n: number): string =>
       s.length <= n ? s : s.slice(0, n - 1) + "…";
 
-    const title = firstUserText
-      ? truncate(firstUserText.replace(/\s+/g, " ").trim(), 80)
-      : id.slice(0, 8);
+    const cleanPrompt = firstUserPromptText
+      ? truncate(firstUserPromptText.replace(/\s+/g, " ").trim(), 80)
+      : "";
+    const idShort = id.slice(0, 8);
+    const title = customName || cleanPrompt || idShort;
 
     return {
       id,
+      idShort,
       title,
+      customName,
+      firstUserPrompt: cleanPrompt,
       firstMessage: truncate(firstUserText, 240),
       lastMessage: truncate(lastAssistantText, 240),
       messageCount: total,
       totalCostUsd,
       model,
       mtime: stat.mtimeMs,
+      cwd,
+      cwdTail: cwd ? tailSegments(cwd, 2) : undefined,
     };
   } catch {
     return null;

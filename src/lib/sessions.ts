@@ -4,7 +4,14 @@ import { settings, getSettings, patchSettings } from "./settings";
 
 export type SessionSummary = {
   id: string;
+  /** First 8 chars of id — for compact display. */
+  idShort: string;
+  /** Display title: customName || firstUserPrompt || idShort. */
   title: string;
+  /** User-set name via /name (custom-title record) — null if absent. */
+  customName: string | null;
+  /** First real user prompt (preamble-stripped, trimmed to 80 chars). */
+  firstUserPrompt: string;
   firstMessage: string;
   lastMessage: string;
   messageCount: number;
@@ -13,6 +20,10 @@ export type SessionSummary = {
   mtime: number;
   /** Branch the session was running on, if available in metadata. */
   branch?: string | null;
+  /** cwd recorded on the session's first user event. */
+  cwd?: string;
+  /** Last 2 path segments of cwd (e.g. apps/heartbeat-for-couple). */
+  cwdTail?: string;
 };
 
 type SessionsState = {

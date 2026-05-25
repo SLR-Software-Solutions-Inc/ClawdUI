@@ -17,21 +17,37 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.CLAWDUI_TOKEN }}
 
-      - name: Check if commits exist since last release tag
+      - name: Check if non-docs commits exist since last release tag
         id: check
+        # Skip the bump when every changed path since the last tag belongs to
+        # the docs/workflow ignore list below. `bump-version.yml` retains the
+        # manual force-bump escape hatch (it always bumps when triggered).
         run: |
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           if [ -z "$LAST_TAG" ]; then
-            echo "no tags yet, will bump from VERSION file"
+            echo "no tags yet — bump"
             echo "should_bump=true" >> "$GITHUB_OUTPUT"
             echo "last_tag=" >> "$GITHUB_OUTPUT"
           else
-            COUNT=$(git rev-list --count "$LAST_TAG..HEAD")
-            echo "commits since $LAST_TAG: $COUNT"
-            if [ "$COUNT" -eq 0 ]; then
+            CHANGED=$(git diff --name-only "$LAST_TAG..HEAD")
+            if [ -z "$CHANGED" ]; then
+              echo "no changes since $LAST_TAG"
               echo "should_bump=false" >> "$GITHUB_OUTPUT"
             else
-              echo "should_bump=true" >> "$GITHUB_OUTPUT"
+              # Filter OUT docs/workflow paths; if any non-ignored file
+              # remains, bump. Ignore list (keep in sync with PR template):
+              #   .github/** .gitea/** docs/** README.md LICENSE NOTICE
+              #   SUPPORT.md .mailmap .gitignore
+              NONIGNORED=$(echo "$CHANGED" | grep -vE '^(\.github/|\.gitea/|docs/|README\.md$|LICENSE$|NOTICE$|SUPPORT\.md$|\.mailmap$|\.gitignore$)' || true)
+              if [ -z "$NONIGNORED" ]; then
+                echo "only docs/workflow changes — skipping release"
+                echo "::notice::Skipping release — only docs/workflow files changed since $LAST_TAG"
+                echo "should_bump=false" >> "$GITHUB_OUTPUT"
+              else
+                CODE_COUNT=$(echo "$NONIGNORED" | wc -l | tr -d ' ')
+                echo "$CODE_COUNT code file(s) changed — will bump"
+                echo "should_bump=true" >> "$GITHUB_OUTPUT"
+              fi
             fi
             echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
           fi

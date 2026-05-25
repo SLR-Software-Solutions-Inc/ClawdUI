@@ -54,8 +54,33 @@
     return list.filter(
       (s) =>
         s.title.toLowerCase().includes(needle) ||
-        s.firstMessage.toLowerCase().includes(needle),
+        s.firstMessage.toLowerCase().includes(needle) ||
+        (s.customName ?? "").toLowerCase().includes(needle) ||
+        (s.firstUserPrompt ?? "").toLowerCase().includes(needle) ||
+        (s.cwdTail ?? "").toLowerCase().includes(needle),
     );
+  }
+
+  function primaryLabel(s: SessionSummary): string {
+    return s.customName || s.firstUserPrompt || "<no prompt yet>";
+  }
+
+  function fmtAbsTime(ms: number): string {
+    try {
+      return new Date(ms).toISOString().replace("T", " ").slice(0, 19) + "Z";
+    } catch {
+      return "";
+    }
+  }
+
+  function tooltipFor(s: SessionSummary): string {
+    const parts = [
+      `id: ${s.id}`,
+      s.cwd ? `cwd: ${s.cwd}` : null,
+      `time: ${fmtAbsTime(s.mtime)}`,
+      s.firstMessage ? `first: ${s.firstMessage}` : null,
+    ].filter(Boolean) as string[];
+    return parts.join("\n");
   }
 
   async function onResume(s: SessionSummary): Promise<void> {
@@ -205,13 +230,16 @@
         {#each filtered($sessions.sessions, query) as s (s.id)}
           <div class="row">
             <div class="row-head">
-              <span class="title" title={s.firstMessage}>{s.title}</span>
-              <span class="when mono">{fmtRelative(s.mtime)}</span>
+              <span class="title" title={tooltipFor(s)}>{primaryLabel(s)}</span>
+              <span class="when mono" title={fmtAbsTime(s.mtime)}>{fmtRelative(s.mtime)}</span>
             </div>
             <div class="row-meta mono">
-              <span title={s.model ?? ""}>{modelAlias(s.model)}</span>
+              {#if s.cwdTail}
+                <span class="cwd-tail" title={s.cwd ?? ""}>{s.cwdTail}</span>
+              {/if}
               <span>{s.messageCount} msg</span>
               <span>{fmtUsd(s.totalCostUsd)}</span>
+              <span title={s.model ?? ""}>{modelAlias(s.model)}</span>
             </div>
             <div class="row-actions">
               <button
@@ -460,6 +488,12 @@
     color: var(--fg-3);
   }
   .row-meta span { white-space: nowrap; }
+  .row-meta .cwd-tail {
+    color: var(--fg-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+  }
 
   .row-actions {
     display: flex;
