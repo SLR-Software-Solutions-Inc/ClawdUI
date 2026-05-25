@@ -92,6 +92,6 @@ jobs:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag || 'v__VERSION__' }}
           releaseName: "ClawdUI ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag || '__VERSION__' }}"
           releaseBody: "See the assets to download and install this version."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

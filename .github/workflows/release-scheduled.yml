@@ -1,33 +1,44 @@
-name: Bump Version
-# Manual escape hatch. Force-bumps even if there are no new commits since the
-# last release tag. For automatic end-of-day releases, see release-scheduled.yml.
-# Uses the same capped-digit carry math: patch ∈ [0..9], minor ∈ [0..9], major ∈ [0..∞].
+name: Scheduled Release
+
 on:
-  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'   # midnight UTC = 19:00 ET / 16:00 PT
+  workflow_dispatch:       # also allow manual fire
 
 permissions:
   contents: write
 
 jobs:
-  bump:
+  maybe-bump:
     runs-on: ubuntu-22.04
     steps:
-      # NOTE: Uses CLAWDUI_TOKEN (a PAT with `contents:write` + `workflows` scopes)
-      # instead of GITHUB_TOKEN. GitHub anti-recursion suppresses workflow triggers
-      # from default-token pushes, so a tag pushed via GITHUB_TOKEN would NOT fire
-      # release.yml's `on: push.tags` trigger. The PAT identity bypasses this.
-      # See docs/PUBLISHING.md for setup.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.CLAWDUI_TOKEN }}
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
+      - name: Check if commits exist since last release tag
+        id: check
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            echo "no tags yet, will bump from VERSION file"
+            echo "should_bump=true" >> "$GITHUB_OUTPUT"
+            echo "last_tag=" >> "$GITHUB_OUTPUT"
+          else
+            COUNT=$(git rev-list --count "$LAST_TAG..HEAD")
+            echo "commits since $LAST_TAG: $COUNT"
+            if [ "$COUNT" -eq 0 ]; then
+              echo "should_bump=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "should_bump=true" >> "$GITHUB_OUTPUT"
+            fi
+            echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Compute next version (capped-digit carry)
         id: bump
+        if: steps.check.outputs.should_bump == 'true'
         run: |
           CURRENT=$(cat VERSION)
           IFS=. read -r MAJOR MINOR PATCH <<< "$CURRENT"
@@ -44,18 +55,25 @@ jobs:
           echo "Bumping $CURRENT -> $NEW"
 
       - name: Write new version into all manifests
+        if: steps.check.outputs.should_bump == 'true'
         env:
           NEW: ${{ steps.bump.outputs.next }}
         run: |
           echo "$NEW" > VERSION
+          # package.json
           node -e "let p=require('./package.json'); p.version='${NEW}'; require('fs').writeFileSync('package.json', JSON.stringify(p,null,2)+'\n');"
+          # sidecar/package.json
           node -e "let p=require('./sidecar/package.json'); p.version='${NEW}'; require('fs').writeFileSync('sidecar/package.json', JSON.stringify(p,null,2)+'\n');"
+          # src-tauri/Cargo.toml — sed on `^version = "..."` first occurrence (package version)
           sed -i.bak -E "0,/^version = \".*\"/s//version = \"${NEW}\"/" src-tauri/Cargo.toml && rm src-tauri/Cargo.toml.bak
+          # src-tauri/tauri.conf.json (top-level "version")
           node -e "let p=require('./src-tauri/tauri.conf.json'); p.version='${NEW}'; require('fs').writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(p,null,2)+'\n');"
+          # regenerate locks
           npm install --silent
           ( cd sidecar && npm install --silent )
 
       - name: Set up SSH signing
+        if: steps.check.outputs.should_bump == 'true'
         env:
           SSH_KEY: ${{ secrets.OPENSOURCE_SSH_KEY }}
           ALLOWED: ${{ secrets.OPENSOURCE_ALLOWED_SIGNERS }}
@@ -65,6 +83,7 @@ jobs:
           printf '%s\n' "$SSH_KEY"      > ~/.ssh/opensource_signing
           chmod 600 ~/.ssh/opensource_signing
           printf '%s\n' "$ALLOWED"      > ~/.ssh/opensource_allowed_signers
+          # Extract pubkey from private key — ssh-keygen -y
           ssh-keygen -y -f ~/.ssh/opensource_signing > ~/.ssh/opensource_signing.pub
           chmod 644 ~/.ssh/opensource_signing.pub
           git config user.name "SLR Software Solutions"
@@ -76,13 +95,23 @@ jobs:
           git config tag.gpgsign true
 
       - name: Commit + tag + push (triggers release.yml)
+        if: steps.check.outputs.should_bump == 'true'
         env:
           NEW: ${{ steps.bump.outputs.next }}
           CURRENT: ${{ steps.bump.outputs.current }}
         run: |
           git add VERSION package.json package-lock.json sidecar/package.json sidecar/package-lock.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
-          MSG="$(printf 'chore(release): manual bump %s -> %s\n\nManual escape hatch via workflow_dispatch. Capped-digit carry.\n' "$CURRENT" "$NEW")"
+          MSG="$(printf 'chore(release): bump version %s -> %s\n\nScheduled end-of-day release. Capped-digit carry: 1.0.9->1.1.0, 1.9.9->2.0.0.\n' "$CURRENT" "$NEW")"
           git commit -m "$MSG"
           git tag -s "v$NEW" -m "ClawdUI v$NEW"
-          git push origin HEAD:${GITHUB_REF#refs/heads/}
+          git push origin main
           git push origin "v$NEW"
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.check.outputs.should_bump }}" = "true" ]; then
+            echo "::notice::Released v${{ steps.bump.outputs.next }}"
+          else
+            echo "::notice::No commits since ${{ steps.check.outputs.last_tag }} — skipped"
+          fi

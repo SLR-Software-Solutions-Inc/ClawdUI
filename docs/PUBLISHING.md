@@ -56,31 +56,49 @@ The public key goes into `src-tauri/tauri.conf.json` under
 3. Pick an export password. That password is `APPLE_CERTIFICATE_PASSWORD`.
 4. Base64-encode it and feed to `gh secret set` as shown above.
 
-## Cutting a release
+## Release policy
 
-You have two options:
+Releases are **scheduled automatically** at midnight UTC daily (19:00 ET /
+16:00 PT) by `.github/workflows/release-scheduled.yml`. The job:
 
-### Option A: Manual tag
+1. Checks for new commits since the last `v*` tag — skips if none.
+2. Computes the next version using **capped-digit carry**:
+   `patch ∈ [0..9]`, `minor ∈ [0..9]`, `major ∈ [0..∞]`.
+   Examples: `1.0.0 → 1.0.1 → … → 1.0.9 → 1.1.0 → … → 1.9.9 → 2.0.0`.
+3. Updates `VERSION`, `package.json`, `sidecar/package.json`,
+   `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and regenerates
+   both `package-lock.json` files.
+4. Commits + tags with the `opensource@slrsoft.ca` SSH signing key
+   (`Verified` badge on GitHub) and pushes — which triggers `release.yml`.
+5. `release.yml` builds + signs + notarizes all platforms and
+   **auto-publishes** the release (no draft).
+
+### Manual escape hatch
+
+If you need to cut a release outside the schedule, trigger
+`bump-version.yml` manually:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+gh workflow run bump-version.yml
+# or: Actions tab → Bump Version → Run workflow
 ```
 
-The `release.yml` workflow triggers on `v*` tags, builds all platforms,
-signs the macOS bundles, and creates a draft GitHub Release.
+It uses the same capped-digit carry math and force-bumps even when there
+are no new commits.
 
-### Option B: Trigger `bump-version.yml`
+### Required secrets for signed commits/tags
 
-From the Actions tab, run "Bump Version" and pick `patch`, `minor`, or
-`major`. The workflow:
+In addition to the Apple/Tauri secrets above, the bump workflows need:
 
-1. Reads the current version from `package.json`.
-2. Bumps it per your choice.
-3. Updates `package.json`, `src-tauri/Cargo.toml`,
-   `src-tauri/tauri.conf.json`, and `VERSION`.
-4. Commits with `chore(version): bump to vX.Y.Z`.
-5. Tags `vX.Y.Z` and pushes (using `CLAWDUI_TOKEN`) — which triggers `release.yml`.
+```bash
+# SSH signing key — generates Verified commits/tags
+gh secret set OPENSOURCE_SSH_KEY < ~/dev/secrets/ssh/opensource_ed25519
+gh secret set OPENSOURCE_ALLOWED_SIGNERS < ~/dev/secrets/ssh/opensource_allowed_signers
+```
+
+The matching public key must also be registered on GitHub under
+**Settings → SSH and GPG keys → New SSH key → Type: Signing Key** for
+the account that owns `CLAWDUI_TOKEN`.
 
 ## Verifying signed builds
 
