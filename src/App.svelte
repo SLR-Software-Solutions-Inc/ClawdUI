@@ -219,6 +219,28 @@
 
   let messages: ChatMessage[] = [];
   let busy = false;
+  // Progressive session-resume state. When `resumeBuffering` is true, the
+  // SDK-event handlers route writes into `resumeBuffer` (plain non-reactive
+  // array) instead of the live `messages` array. After the full jsonl has
+  // been replayed, commitResumeBuffer() splices the LAST 100 messages into
+  // `messages` (instant first paint) and backfills older history in chunks
+  // of 50 via setTimeout(0)/requestIdleCallback so the main thread stays
+  // responsive. The "Loading older messages…" chip reads
+  // resumeBackfillRemaining / resumeBackfillTotal.
+  // Large sessions (120MB / 33k+ msgs) used to freeze the UI for 30-60s
+  // because every push triggered a $state proxy update + a full re-render
+  // of every MessageBlock — see commit 84ff051 for the sidecar-side fix
+  // and this block for the FE half.
+  let resumeBuffering = false;
+  let resumeBuffer: ChatMessage[] = [];
+  let resumeBackfillRemaining = 0;
+  let resumeBackfillTotal = 0;
+  const RESUME_FIRST_RENDER_COUNT = 100;
+  const RESUME_BACKFILL_CHUNK = 50;
+  /** Active write target — flipped during resume replay. */
+  function msgsTarget(): ChatMessage[] {
+    return resumeBuffering ? resumeBuffer : messages;
+  }
   // When non-null, the next send() rewrites messages[editingIndex] with the
   // composer text (and drops everything after) instead of appending a new
   // user message. Lets the user revise a prior prompt without restarting
@@ -846,6 +868,27 @@
   }
 
   function appendText(role: ChatMessage["role"], text: string) {
+    if (resumeBuffering) {
+      // Mutate the non-reactive buffer in place — no reactive bump needed,
+      // commitResumeBuffer() will hand a fresh slice to `messages` later.
+      const last = resumeBuffer[resumeBuffer.length - 1];
+      if (last && last.role === role && last.streaming) {
+        const block = last.blocks[last.blocks.length - 1];
+        if (block && block.type === "text") {
+          block.text += text;
+          return;
+        }
+        last.blocks.push({ type: "text", text });
+        return;
+      }
+      resumeBuffer.push({
+        role,
+        blocks: [{ type: "text", text }],
+        streaming: true,
+        timestamp: Date.now(),
+      });
+      return;
+    }
     const last = messages[messages.length - 1];
     if (last && last.role === role && last.streaming) {
       const block = last.blocks[last.blocks.length - 1];
@@ -865,6 +908,15 @@
   }
 
   function pushBlock(role: ChatMessage["role"], block: ChatMessage["blocks"][number]) {
+    if (resumeBuffering) {
+      const last = resumeBuffer[resumeBuffer.length - 1];
+      if (last && last.role === role && last.streaming) {
+        last.blocks.push(block);
+        return;
+      }
+      resumeBuffer.push({ role, blocks: [block], streaming: true, timestamp: Date.now() });
+      return;
+    }
     const last = messages[messages.length - 1];
     if (last && last.role === role && last.streaming) {
       last.blocks.push(block);
@@ -875,6 +927,96 @@
       ...messages,
       { role, blocks: [block], streaming: true, timestamp: Date.now() },
     ];
+  }
+
+  /**
+   * Phase transition: idle → resuming → first-render → backfill → done.
+   *
+   * After resume replay finishes the full transcript sits in `resumeBuffer`.
+   * Commit the last RESUME_FIRST_RENDER_COUNT messages to `messages` so the
+   * user sees the chat bottom immediately; flip `resumeBuffering=false` to
+   * hide the full-screen spinner. Then progressively prepend older history
+   * in RESUME_BACKFILL_CHUNK-sized chunks via setTimeout(0)
+   * (or requestIdleCallback when available) so the main thread stays
+   * responsive. While backfill runs, a "Loading older messages…" chip
+   * at the top of the chat surfaces progress.
+   *
+   * Scroll preservation: when prepending older history above the viewport,
+   * record `scrollHeight - scrollTop` (distance from bottom) before the
+   * splice and restore it after via `requestAnimationFrame`. With chat
+   * anchored to bottom (the common case after resume), distance-from-bottom
+   * stays at 0 and the view doesn't jump.
+   */
+  function commitResumeBuffer(): void {
+    const total = resumeBuffer.length;
+    if (total === 0) {
+      resumeBuffering = false;
+      resumeBuffer = [];
+      return;
+    }
+    if (total <= RESUME_FIRST_RENDER_COUNT) {
+      // Small session — commit everything at once, no backfill needed.
+      messages = resumeBuffer;
+      resumeBuffer = [];
+      resumeBuffering = false;
+      resumeBackfillRemaining = 0;
+      resumeBackfillTotal = 0;
+      console.log(
+        `[DIAG-FE] resume commit — small session (${total} msgs), single-shot render`,
+      );
+      // Scroll to bottom on next frame so the latest message is visible.
+      queueMicrotask(() => {
+        scrollEl?.scrollTo({ top: scrollEl.scrollHeight });
+      });
+      return;
+    }
+    // Large session — slice tail for first paint, queue head for backfill.
+    const splitAt = total - RESUME_FIRST_RENDER_COUNT;
+    messages = resumeBuffer.slice(splitAt);
+    // Keep the older half in resumeBuffer for the backfill loop.
+    resumeBuffer = resumeBuffer.slice(0, splitAt);
+    resumeBackfillTotal = splitAt;
+    resumeBackfillRemaining = splitAt;
+    resumeBuffering = false;
+    console.log(
+      `[DIAG-FE] resume commit — large session, first render ${RESUME_FIRST_RENDER_COUNT} of ${total}, backfilling ${splitAt}`,
+    );
+    queueMicrotask(() => {
+      scrollEl?.scrollTo({ top: scrollEl.scrollHeight });
+      scheduleBackfill();
+    });
+  }
+
+  /** Schedule one backfill chunk; reschedules itself until buffer drained. */
+  function scheduleBackfill(): void {
+    if (resumeBuffer.length === 0) {
+      resumeBackfillRemaining = 0;
+      resumeBackfillTotal = 0;
+      console.log("[DIAG-FE] resume backfill — complete");
+      return;
+    }
+    const run = () => {
+      const take = Math.min(RESUME_BACKFILL_CHUNK, resumeBuffer.length);
+      const chunk = resumeBuffer.slice(-take);
+      resumeBuffer = resumeBuffer.slice(0, -take);
+      // Preserve viewport: distance from bottom should stay constant when
+      // prepending above. record before, restore after the DOM update.
+      const el = scrollEl;
+      const distFromBottom = el ? el.scrollHeight - el.scrollTop : 0;
+      messages = [...chunk, ...messages];
+      resumeBackfillRemaining = resumeBuffer.length;
+      requestAnimationFrame(() => {
+        if (el) el.scrollTop = el.scrollHeight - distFromBottom;
+        // Yield to main thread between chunks.
+        const idle = (window as any).requestIdleCallback as
+          | ((cb: () => void, opts?: { timeout?: number }) => number)
+          | undefined;
+        if (idle) idle(() => scheduleBackfill(), { timeout: 200 });
+        else setTimeout(scheduleBackfill, 0);
+      });
+    };
+    // First chunk fires immediately; subsequent ones are scheduled by run().
+    run();
   }
 
   function finalize() {
@@ -1192,19 +1334,39 @@
     // about to continue from. Failures are silent unless the workspace
     // actually has a cwd to read from — the SDK still attempts the resume
     // server-side regardless.
+    //
+    // Large sessions (120MB / 33k+ msgs) used to freeze the UI for 30-60s.
+    // Now we replay into a non-reactive buffer, then splice the LAST 100
+    // into `messages` for instant first paint, and backfill the rest in
+    // 50-msg chunks via setTimeout(0). See commitResumeBuffer() below.
     const resumeId = getSettings().resume;
     if (resumeId && getSettings().cwd) {
       try {
+        resumeBuffering = true;
+        resumeBuffer = [];
+        resumeBackfillRemaining = 0;
+        resumeBackfillTotal = 0;
+        console.log(`[DIAG-FE] resume(${resumeId}) — loading session jsonl`);
         const raw = await loadSessionRaw(resumeId);
+        console.log(
+          `[DIAG-FE] resume(${resumeId}) — replaying ${raw.length} jsonl entries into buffer`,
+        );
         for (const entry of raw) {
           if (entry && typeof entry === "object") {
             handleSdkMessage(entry as Record<string, unknown>);
           }
         }
-        messages = messages.map((m) =>
-          m.streaming ? { ...m, streaming: false } : m,
+        // Settle streaming flags inside the buffer before commit.
+        for (const m of resumeBuffer) {
+          if (m.streaming) m.streaming = false;
+        }
+        console.log(
+          `[DIAG-FE] resume(${resumeId}) — buffer holds ${resumeBuffer.length} msgs, committing last ${RESUME_FIRST_RENDER_COUNT}`,
         );
+        commitResumeBuffer();
       } catch (err) {
+        resumeBuffering = false;
+        resumeBuffer = [];
         // Stale resume id — likely the session file was deleted. Clear so
         // the next newSession() starts fresh instead of replaying ghosts.
         patchSettings({ resume: undefined });
@@ -2239,6 +2401,17 @@
     </header>
 
     <div class="work-area" bind:this={chatColEl}>
+      {#if resumeBuffering}
+        <div class="resume-spinner-overlay" role="status" aria-live="polite">
+          <div class="resume-spinner-card">
+            <div class="resume-spinner-ring" aria-hidden="true"></div>
+            <div class="resume-spinner-label">Loading session history…</div>
+            <div class="resume-spinner-sub mono">
+              Reading transcript from disk
+            </div>
+          </div>
+        </div>
+      {/if}
       {#if editorOpen}
         <section
           class="editor-stack"
@@ -2304,6 +2477,13 @@
           </div>
         </div>
         <div class="messages" class:centered={messages.length === 0} bind:this={scrollEl}>
+          {#if resumeBackfillRemaining > 0}
+            <div class="resume-backfill-chip mono" role="status" aria-live="polite">
+              <span class="spinner-dot"></span>
+              Loading older messages… ({resumeBackfillTotal - resumeBackfillRemaining}
+              of {resumeBackfillTotal})
+            </div>
+          {/if}
           {#if messages.length === 0}
             <div class="hero">
               <EmptyState
@@ -2837,6 +3017,8 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    /* anchor for .resume-spinner-overlay (position: absolute) */
+    position: relative;
   }
   .editor-stack {
     display: flex;
@@ -3743,5 +3925,86 @@
   /* Desktop hamburger always hidden (already display:none by default). */
   @media (min-width: 1024px) {
     .hamburger-btn { display: none; }
+  }
+
+  /* Resume — full-screen spinner overlay (phase 1) */
+  .resume-spinner-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in oklab, var(--surface) 78%, transparent);
+    backdrop-filter: blur(14px) saturate(120%);
+    -webkit-backdrop-filter: blur(14px) saturate(120%);
+    pointer-events: auto;
+    animation: resume-overlay-in 180ms ease-out;
+  }
+  @keyframes resume-overlay-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  .resume-spinner-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 28px 36px;
+    border-radius: 16px;
+    background: color-mix(in oklab, var(--surface) 88%, transparent);
+    border: 1px solid color-mix(in oklab, var(--accent) 22%, transparent);
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  }
+  .resume-spinner-ring {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 2.5px solid color-mix(in oklab, var(--accent) 18%, transparent);
+    border-top-color: var(--accent);
+    animation: resume-ring-spin 0.9s linear infinite;
+  }
+  @keyframes resume-ring-spin {
+    to { transform: rotate(360deg); }
+  }
+  .resume-spinner-label {
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--fg);
+  }
+  .resume-spinner-sub {
+    font-size: 0.75rem;
+    opacity: 0.55;
+  }
+
+  /* Resume — backfill chip (phase 2, lives inside .messages) */
+  .resume-backfill-chip {
+    position: sticky;
+    top: 6px;
+    align-self: center;
+    z-index: 5;
+    margin: 6px auto;
+    padding: 4px 12px;
+    font-size: 0.72rem;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--surface) 86%, transparent);
+    border: 1px solid color-mix(in oklab, var(--accent) 20%, transparent);
+    color: var(--fg);
+    opacity: 0.92;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: max-content;
+    pointer-events: none;
+  }
+  .resume-backfill-chip .spinner-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1.5px solid color-mix(in oklab, var(--accent) 30%, transparent);
+    border-top-color: var(--accent);
+    animation: resume-ring-spin 0.9s linear infinite;
   }
 </style>
