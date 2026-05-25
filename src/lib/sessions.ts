@@ -72,10 +72,19 @@ export async function refresh(): Promise<void> {
 }
 
 export function resume(id: string): void {
+  const prev = getSettings();
+  // [DIAG] resume click trace — keep until session-resume flow stabilized.
+  console.error(
+    `[DIAG-FE] resume(${id}) — prior settings.cwd=${prev.cwd} prior.resume=${prev.resume}`,
+  );
   patchSettings({ resume: id, forkSession: false, continueLatest: false });
+  console.error(
+    `[DIAG-FE] resume(${id}) — post settings.cwd=${getSettings().cwd} resume=${getSettings().resume}`,
+  );
 }
 
 export function fork(id: string): void {
+  console.error(`[DIAG-FE] fork(${id})`);
   patchSettings({ resume: id, forkSession: true, continueLatest: false });
 }
 

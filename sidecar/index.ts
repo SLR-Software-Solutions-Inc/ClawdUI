@@ -452,6 +452,20 @@ function logProbe(line: string): void {
 }
 
 function emit(ev: OutboundEvent): void {
+  // [DIAG] outbound event trace — keep until session-resume flow stabilized.
+  try {
+    const anyEv = ev as Record<string, unknown>;
+    const sid = anyEv.session_id;
+    const summary =
+      ev.type === "message" || ev.type === "result"
+        ? "<elided>"
+        : JSON.stringify(ev).slice(0, 200);
+    console.error(
+      `[DIAG-OUT] id=${(ev as { id?: string }).id} type=${ev.type} sid=${sid} ${summary}`,
+    );
+  } catch {
+    /* never let diag break emit */
+  }
   process.stdout.write(JSON.stringify(ev) + "\n");
   // Tee to relay so remote peers see the same event stream as the local UI.
   // Skip relay-state events themselves to avoid feedback loops.
@@ -3496,6 +3510,14 @@ function handleCliCommand(req: InboundMessage): boolean {
 }
 
 async function handle(req: InboundMessage): Promise<void> {
+  // [DIAG] inbound RPC trace — keep until session-resume flow stabilized.
+  try {
+    console.error(
+      `[DIAG-IN] id=${req.id} type=${req.type} ${JSON.stringify(req).slice(0, 300)}`,
+    );
+  } catch {
+    /* never let diag break dispatch */
+  }
   if (handleCliCommand(req)) return;
   switch (req.type) {
     case "ping":
@@ -3503,7 +3525,18 @@ async function handle(req: InboundMessage): Promise<void> {
       return;
 
     case "start_session": {
+      // [DIAG] log full option shape on resume path so we can correlate
+      // "Previous session no longer exists" with what the SDK actually saw.
+      try {
+        const o = (req.options ?? {}) as Record<string, unknown>;
+        console.error(
+          `[DIAG] start_session entry cwd=${o.cwd} resume=${o.resume} continue=${o.continue} forkSession=${o.forkSession} sessionId=${o.sessionId}`,
+        );
+      } catch {
+        /* swallow */
+      }
       if (getMain()) {
+        console.error("[DIAG] start_session rejected — getMain() already set");
         emit({ id: req.id, type: "error", error: "session already active" });
         return;
       }
@@ -3515,6 +3548,64 @@ async function handle(req: InboundMessage): Promise<void> {
       // `pathToClaudeCodeExecutable` so the SDK never resolves its own bundled
       // fallback.
       const opts: Options = { ...(req.options ?? {}) };
+      // Cross-bucket resume: when the caller passes `resume: <id>`, the SDK
+      // looks up the jsonl in `~/.claude/projects/<sanitizeCwd(opts.cwd)>/`.
+      // If the UI is currently focused on a different workspace cwd (e.g.
+      // the user opened `worktrees/` but the session was recorded inside
+      // `worktrees/<branch>/`), the SDK opens the WRONG bucket and emits
+      // "No conversation found with session id …" → the frontend then shows
+      // "Previous session no longer exists — starting fresh." and the new
+      // session never connects.
+      //
+      // Resolve this sidecar-side by scanning the candidate buckets for the
+      // requested session id, then patching `opts.cwd` to the cwd recorded
+      // on the session's first event. Pure data lookup — no control-flow
+      // change, no mutex.
+      try {
+        const resumeId = (opts as { resume?: unknown }).resume;
+        const optCwd = (opts as { cwd?: unknown }).cwd;
+        if (
+          typeof resumeId === "string" &&
+          resumeId.length > 0 &&
+          typeof optCwd === "string" &&
+          optCwd.length > 0
+        ) {
+          const bucket = findSessionBucket(optCwd, resumeId);
+          const jsonl = path.join(bucket, `${resumeId}.jsonl`);
+          if (fs.existsSync(jsonl)) {
+            // Read first non-empty line → grab `cwd` field. Streaming is
+            // overkill here; first lines are small.
+            const head = fs.readFileSync(jsonl, "utf8").split(/\r?\n/, 5);
+            let canonicalCwd: string | undefined;
+            for (const line of head) {
+              if (!line) continue;
+              const obj = safeParse(line);
+              if (obj && typeof obj.cwd === "string" && obj.cwd) {
+                canonicalCwd = obj.cwd;
+                break;
+              }
+            }
+            if (canonicalCwd && canonicalCwd !== optCwd) {
+              console.error(
+                `[DIAG] start_session resume cwd override: ${optCwd} -> ${canonicalCwd} (session ${resumeId})`,
+              );
+              (opts as { cwd?: string }).cwd = canonicalCwd;
+            } else {
+              console.error(
+                `[DIAG] start_session resume cwd OK (bucket=${bucket}, cwd=${optCwd})`,
+              );
+            }
+          } else {
+            console.error(
+              `[DIAG] start_session resume: jsonl not found in any bucket for id=${resumeId} (workspace cwd=${optCwd})`,
+            );
+          }
+        }
+      } catch (e) {
+        console.error(
+          `[DIAG] start_session resume cwd patch threw: ${(e as Error).message}`,
+        );
+      }
       // Validate workspace cwd BEFORE the SDK spawns. posix_spawn returns
       // ENOENT for a missing chdir target but Node attributes the error to
       // the command path, so the SDK then mis-reports it as a missing binary.
@@ -3944,7 +4035,16 @@ async function handle(req: InboundMessage): Promise<void> {
     }
 
     case "list_sessions": {
-      resultOrError(req.id, listSessions(req.cwd));
+      console.error(`[DIAG] list_sessions cwd=${req.cwd}`);
+      resultOrError(
+        req.id,
+        listSessions(req.cwd).then((list) => {
+          console.error(
+            `[DIAG] list_sessions returned ${list.length} entries for cwd=${req.cwd}`,
+          );
+          return list;
+        }),
+      );
       return;
     }
 
@@ -4516,10 +4616,12 @@ rl.on("line", (line) => {
     relay.forward("rpc", req);
   }
   void handle(req).catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[DIAG] handle() threw for id=${req.id} type=${req.type}: ${msg}`);
     emit({
       id: req.id,
       type: "error",
-      error: err instanceof Error ? err.message : String(err),
+      error: msg,
     });
   });
 });

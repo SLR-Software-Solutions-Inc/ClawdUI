@@ -1047,6 +1047,16 @@
     if (sessionStarted) return;
     sidecarState = "connecting";
     const opts = settingsToSDKOptions(getSettings());
+    // [DIAG] frontend start_session payload trace.
+    try {
+      const o = opts as Record<string, unknown>;
+      // eslint-disable-next-line no-console
+      console.error(
+        `[DIAG-FE] startSession cwd=${o.cwd} resume=${o.resume} continue=${o.continue} forkSession=${o.forkSession} sessionId=${o.sessionId}`,
+      );
+    } catch {
+      /* swallow */
+    }
     try {
       await rpc({ id: uuid(), type: "start_session", options: opts });
     } catch (err) {
@@ -1136,6 +1146,11 @@
   }
 
   async function newSession(overrideCwd?: string | null) {
+    // [DIAG] newSession entry trace — keep until session-resume flow stabilized.
+    // eslint-disable-next-line no-console
+    console.error(
+      `[DIAG-FE] newSession overrideCwd=${overrideCwd} priorCwd=${getSettings().cwd} priorResume=${getSettings().resume} sessionStarted=${sessionStarted}`,
+    );
     // Pivot guarantee: when a workspace/worktree handler passes an explicit
     // cwd, write it into settings BEFORE end+start so the SDK reads the new
     // value verbatim. Without this, any race against patchSettings or any
