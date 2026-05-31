@@ -23,7 +23,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@sentry/node": "^10.53.1",
+    "@sentry/node": "^10.55.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {
