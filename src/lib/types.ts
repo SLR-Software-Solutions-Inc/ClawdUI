@@ -166,7 +166,7 @@ export type Settings = {
   /**
    * Last folder the user picked for the PR-resume "where to clone" prompt.
    * Used as the defaultPath on the next dialog open so the picker remembers
-   * the user's preferred workspace root (e.g. ~/dev/tools). Empty = no prior
+   * the user's preferred workspace root (e.g. ~/Developer/tools). Empty = no prior
    * pick; fall back to settings.cwd.
    */
   lastPrCheckoutDir: string;

@@ -92,8 +92,8 @@ In addition to the Apple/Tauri secrets above, the bump workflows need:
 
 ```bash
 # SSH signing key — generates Verified commits/tags
-gh secret set OPENSOURCE_SSH_KEY < ~/dev/secrets/ssh/opensource_ed25519
-gh secret set OPENSOURCE_ALLOWED_SIGNERS < ~/dev/secrets/ssh/opensource_allowed_signers
+gh secret set OPENSOURCE_SSH_KEY < ~/Documents/Secrets/ssh/opensource_ed25519
+gh secret set OPENSOURCE_ALLOWED_SIGNERS < ~/Documents/Secrets/ssh/opensource_allowed_signers
 ```
 
 The matching public key must also be registered on GitHub under
